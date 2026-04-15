@@ -5,9 +5,36 @@ const DEFAULT_PROJECT_PATH = "/Users/leo/Projects/agentflow-platform";
 
 const menuItems = [
   { key: "pipeline", label: "流程编排", icon: "flow" },
+  { key: "policy", label: "决策模型", icon: "decision" },
   { key: "agent", label: "Agent 职责", icon: "bot" },
   { key: "skill", label: "Skill 管理", icon: "spark" },
 ];
+
+const approvalOptions = [
+  { key: "requirement-review", label: "需求确认" },
+  { key: "architecture-review", label: "方案确认" },
+  { key: "write-files", label: "写文件前" },
+  { key: "run-command", label: "运行命令前" },
+  { key: "completion-review", label: "完成验收" },
+  { key: "deployment", label: "部署上线" },
+  { key: "destructive-command", label: "破坏性命令" },
+];
+
+const defaultDelegationPolicy = {
+  defaultMode: "self_first",
+  allowSubAgents: true,
+  allowAgentTeam: true,
+  allowRecursiveDelegation: true,
+  maxDepth: 2,
+  maxParallelAgents: 4,
+  requireHumanApprovalFor: ["architecture-review", "write-files", "destructive-command", "deployment"],
+  escalationRules: {
+    self: "任务小、路径清楚、上下文足够、单一产物时由当前 Agent 自己完成。",
+    subAgent: "子任务边界清楚、适合并行、需要隔离上下文或专业审查时创建 Sub Agent。",
+    team: "任务跨多个阶段/角色/产物，需要 Team Leader 拆解、调度、验收时启动 Agent Team。",
+    recursive: "子任务自身变成复杂项目，且父 Agent 能验收结果时，允许受控递归委托。",
+  },
+};
 
 const defaultPipelines = [
   {
@@ -15,6 +42,7 @@ const defaultPipelines = [
     name: "核心研发流程",
     leaderAgentName: "agentflow-core-rd-team-leader",
     projectPath: DEFAULT_PROJECT_PATH,
+    delegationPolicy: clonePolicy(defaultDelegationPolicy),
     stages: [
       {
         id: "s1",
@@ -80,6 +108,7 @@ function normalizePipelines(pipelines) {
     ...pipeline,
     leaderAgentName: pipeline.leaderAgentName || toLeaderAgentName(pipeline.name, pipeline.id),
     projectPath: pipeline.projectPath || DEFAULT_PROJECT_PATH,
+    delegationPolicy: normalizePolicy(pipeline.delegationPolicy),
     stages: (pipeline.stages || []).map((stage) => ({
       ...stage,
       agents: (stage.agents || []).map((agent) => ({
@@ -141,6 +170,8 @@ const syncingDefinition = ref(false);
 const currentRun = ref(null);
 const launchStatus = ref("等待填写需求");
 const availableClaudeAgents = ref([]);
+const definitionPreview = ref(null);
+const preflightResult = ref(null);
 
 const API_BASE = "http://localhost:8787";
 
@@ -181,10 +212,22 @@ const focusedAgent = computed(() => {
   return focusedStage.value.agents.find((agent) => agent.id === state.focusedAgentId) ?? null;
 });
 
-const stageStats = computed(() => {
-  if (!selectedPipeline.value) return { stageCount: 0, agentCount: 0, skillCount: 0 };
+const activePreflightChecks = computed(() =>
+  currentRun.value?.preflight?.checks || preflightResult.value?.checks || []
+);
 
-  return selectedPipeline.value.stages.reduce(
+const hasPreflightFailures = computed(() =>
+  activePreflightChecks.value.some((check) => check.status === "fail")
+);
+
+const hasPreflightWarnings = computed(() =>
+  activePreflightChecks.value.some((check) => check.status === "warn")
+);
+
+const stageStats = computed(() => {
+  if (!selectedPipeline.value) return { stageCount: 0, agentCount: 0, skillCount: 0, depth: 0 };
+
+  const summary = selectedPipeline.value.stages.reduce(
     (summary, stage) => {
       summary.stageCount += 1;
       summary.agentCount += stage.agents.length;
@@ -193,6 +236,8 @@ const stageStats = computed(() => {
     },
     { stageCount: 0, agentCount: 0, skillCount: 0 }
   );
+  summary.depth = selectedPipeline.value.delegationPolicy?.maxDepth ?? 1;
+  return summary;
 });
 
 const flowPaths = computed(() => {
@@ -279,6 +324,7 @@ async function createPipeline() {
     name,
     leaderAgentName: state.forms.leaderAgentName.trim() || toLeaderAgentName(name, pipelineId),
     projectPath: state.forms.projectPath.trim() || DEFAULT_PROJECT_PATH,
+    delegationPolicy: clonePolicy(defaultDelegationPolicy),
     stages: [],
   };
 
@@ -290,14 +336,7 @@ async function createPipeline() {
   state.forms.leaderAgentName = "";
   state.forms.stageName = "";
   state.activeMenu = "pipeline";
-  lastAction.value = `已创建流水线：${pipeline.name}，正在生成 Team Leader...`;
-
-  try {
-    await savePipelineDefinition(pipeline);
-    lastAction.value = `已创建流水线，并生成 Team Leader：${pipeline.leaderAgentName}`;
-  } catch (error) {
-    lastAction.value = `已创建本地流水线，Agent 同步失败：${error.message}`;
-  }
+  lastAction.value = `已创建本地流水线：${pipeline.name}，同步 Agents 后会生成 Team Leader`;
 }
 
 function addStage() {
@@ -411,6 +450,48 @@ function resetDemoData() {
   state.activeMenu = "pipeline";
 }
 
+function setPolicyValue(key, value) {
+  if (!selectedPipeline.value) return;
+  selectedPipeline.value.delegationPolicy[key] = value;
+}
+
+function togglePolicyFlag(key) {
+  if (!selectedPipeline.value) return;
+  selectedPipeline.value.delegationPolicy[key] = !selectedPipeline.value.delegationPolicy[key];
+}
+
+function toggleApproval(key) {
+  if (!selectedPipeline.value) return;
+  const approvals = selectedPipeline.value.delegationPolicy.requireHumanApprovalFor;
+  if (approvals.includes(key)) {
+    selectedPipeline.value.delegationPolicy.requireHumanApprovalFor = approvals.filter((item) => item !== key);
+    return;
+  }
+  selectedPipeline.value.delegationPolicy.requireHumanApprovalFor = [...approvals, key];
+}
+
+function clonePolicy(policy) {
+  return JSON.parse(JSON.stringify(policy));
+}
+
+function normalizePolicy(policy) {
+  const merged = {
+    ...clonePolicy(defaultDelegationPolicy),
+    ...(policy || {}),
+    escalationRules: {
+      ...defaultDelegationPolicy.escalationRules,
+      ...(policy?.escalationRules || {}),
+    },
+  };
+
+  merged.maxDepth = Number(merged.maxDepth || 1);
+  merged.maxParallelAgents = Number(merged.maxParallelAgents || 1);
+  merged.requireHumanApprovalFor = Array.isArray(merged.requireHumanApprovalFor)
+    ? merged.requireHumanApprovalFor
+    : [];
+  return merged;
+}
+
 async function loadDefinition() {
   try {
     const response = await fetch(`${API_BASE}/api/definition`);
@@ -447,13 +528,34 @@ async function syncDefinition() {
 
   syncingDefinition.value = true;
   try {
-    const payload = await savePipelineDefinition(selectedPipeline.value);
-    lastAction.value = `已同步 DSL，并生成 ${payload.generatedAgents?.length || 0} 个 Claude agent 文件`;
+    definitionPreview.value = await previewPipelineDefinition(selectedPipeline.value);
+    lastAction.value = definitionPreview.value.changed
+      ? "已生成 Team Leader 预览，请确认写入"
+      : "Team Leader 内容无变化，可直接关闭预览";
   } catch (error) {
     lastAction.value = error.message;
   } finally {
     syncingDefinition.value = false;
   }
+}
+
+async function confirmSyncDefinition() {
+  if (!selectedPipeline.value) return;
+  syncingDefinition.value = true;
+  try {
+    const payload = await savePipelineDefinition(selectedPipeline.value);
+    definitionPreview.value = null;
+    lastAction.value = `已同步 DSL，并生成 ${payload.generatedAgents?.length || 0} 个 Claude agent 文件`;
+    await loadAvailableAgents();
+  } catch (error) {
+    lastAction.value = error.message;
+  } finally {
+    syncingDefinition.value = false;
+  }
+}
+
+function closeDefinitionPreview() {
+  definitionPreview.value = null;
 }
 
 async function startRun() {
@@ -466,6 +568,12 @@ async function startRun() {
   runError.value = "";
 
   try {
+    const preflight = await runPreflight(selectedPipeline.value);
+    preflightResult.value = preflight;
+    if (!preflight.ok) {
+      throw new Error("启动前预检失败，请先修复失败项");
+    }
+
     const syncPayload = await savePipelineDefinition(selectedPipeline.value);
     const pipelineSnapshot = syncPayload.definition?.pipeline || clonePipelines([selectedPipeline.value])[0];
     const response = await fetch(`${API_BASE}/api/runs`, {
@@ -482,14 +590,42 @@ async function startRun() {
       throw new Error(payload.detail || payload.error || "创建运行失败");
     }
 
-    currentRun.value = payload;
+    currentRun.value = { ...payload, preflight };
     state.activeView = "run";
-    launchStatus.value = "已创建运行，请确认需求后一键启动 iTerm2";
+    launchStatus.value = hasPreflightWarnings.value
+      ? "已创建运行，存在预检警告，请确认后启动 iTerm2"
+      : "已创建运行，请确认需求后一键启动 iTerm2";
   } catch (error) {
     runError.value = error.message;
   } finally {
     runStarting.value = false;
   }
+}
+
+async function previewPipelineDefinition(pipeline) {
+  const response = await fetch(`${API_BASE}/api/definition/preview`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pipeline: clonePipelines([pipeline])[0] }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.error || "生成预览失败");
+  }
+  return payload;
+}
+
+async function runPreflight(pipeline) {
+  const response = await fetch(`${API_BASE}/api/preflight`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pipeline: clonePipelines([pipeline])[0] }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.error || "预检失败");
+  }
+  return payload;
 }
 
 async function savePipelineDefinition(pipeline) {
@@ -520,7 +656,7 @@ async function openInITerm() {
     if (!response.ok) {
       throw new Error(payload.detail || payload.error || "打开 iTerm2 失败");
     }
-    currentRun.value = payload;
+    currentRun.value = { ...payload, preflight: currentRun.value?.preflight };
     launchStatus.value = "已打开 iTerm2，Claude 已在项目目录启动";
   } catch (error) {
     launchStatus.value = error.message;
@@ -544,6 +680,8 @@ function iconPath(icon) {
       return "M4 6.5 12 3l8 3.5L12 10 4 6.5Zm0 5L12 15l8-3.5M4 16.5 12 20l8-3.5";
     case "flow":
       return "M6 6h4v4H6V6Zm8 0h4a2 2 0 0 1 2 2v1M6 14h4v4H6v-4Zm8 0h4v4h-4v-4ZM10 8h4m-2 2v4";
+    case "decision":
+      return "M12 3v4m0 10v4M5 8l3 3-3 3-3-3 3-3Zm14 0 3 3-3 3-3-3 3-3ZM9 11h6m-3-4c2.5 0 4 1.6 4 4s-1.5 4-4 4-4-1.6-4-4 1.5-4 4-4Z";
     case "bot":
       return "M9 5h6m-5 0V3m4 2V3m-7 4h10a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2Zm3 6h.01M14 13h.01";
     case "spark":
@@ -645,6 +783,10 @@ onMounted(() => {
             <span>Skill</span>
             <strong>{{ stageStats.skillCount }}</strong>
           </div>
+          <div class="header-stat">
+            <span>Depth</span>
+            <strong>{{ stageStats.depth }}</strong>
+          </div>
           <button class="primary-button" type="button" :disabled="runStarting" @click="startRun">
             {{ runStarting ? "启动中..." : "运行流程" }}
           </button>
@@ -654,6 +796,49 @@ onMounted(() => {
         </div>
       </header>
       <div v-if="runError" class="run-error-banner">{{ runError }}</div>
+      <div v-if="preflightResult" class="preflight-strip">
+        <strong>启动前预检</strong>
+        <span :class="{ danger: hasPreflightFailures, warn: hasPreflightWarnings && !hasPreflightFailures }">
+          {{ hasPreflightFailures ? "存在失败项，已阻止运行" : hasPreflightWarnings ? "存在警告项，可确认后继续" : "全部通过" }}
+        </span>
+        <div class="preflight-chip-list">
+          <span
+            v-for="check in preflightResult.checks"
+            :key="check.id"
+            :class="['preflight-chip', check.status]"
+          >
+            {{ check.label }}
+          </span>
+        </div>
+      </div>
+      <section v-if="definitionPreview" class="definition-preview">
+        <div class="preview-header">
+          <div>
+            <p class="run-panel-label">Team Leader Preview</p>
+            <h3>{{ definitionPreview.leaderAgentName }}</h3>
+            <span>{{ definitionPreview.leaderPath }}</span>
+          </div>
+          <div class="preview-actions">
+            <span :class="['preview-state', { changed: definitionPreview.changed }]">
+              {{ definitionPreview.changed ? "检测到变更" : "内容无变化" }}
+            </span>
+            <button class="ghost-button" type="button" @click="closeDefinitionPreview">关闭</button>
+            <button class="primary-button" type="button" :disabled="syncingDefinition" @click="confirmSyncDefinition">
+              {{ syncingDefinition ? "写入中..." : "确认写入" }}
+            </button>
+          </div>
+        </div>
+        <div class="preview-grid">
+          <div>
+            <strong>当前文件</strong>
+            <pre>{{ definitionPreview.currentMarkdown || "尚未生成 Team Leader 文件" }}</pre>
+          </div>
+          <div>
+            <strong>即将写入</strong>
+            <pre>{{ definitionPreview.nextMarkdown }}</pre>
+          </div>
+        </div>
+      </section>
 
       <div class="workspace-body">
         <section class="control-panel">
@@ -741,6 +926,122 @@ onMounted(() => {
             <div v-else class="panel-empty">请先创建或选择一条流水线。</div>
 
             <div class="toolbar-status">{{ lastAction }}</div>
+          </div>
+
+          <div v-if="activeMenu === 'policy'" class="panel-section policy-section">
+            <div v-if="!selectedPipeline" class="panel-empty">请先创建或选择一条流水线。</div>
+            <template v-else>
+              <div class="toolbar-group policy-card wide">
+                <div class="section-heading">
+                  <p>委托升级策略</p>
+                  <span>定义什么时候自己干、开 Sub Agent、启动 Agent Team。</span>
+                </div>
+                <select
+                  :value="selectedPipeline.delegationPolicy.defaultMode"
+                  @change="setPolicyValue('defaultMode', $event.target.value)"
+                >
+                  <option value="self_first">自己优先</option>
+                  <option value="subagent_first">子 Agent 优先</option>
+                  <option value="team_first">Team 优先</option>
+                </select>
+                <div class="policy-grid">
+                  <label>
+                    <span>最大递归深度</span>
+                    <input
+                      :value="selectedPipeline.delegationPolicy.maxDepth"
+                      type="number"
+                      min="1"
+                      max="3"
+                      @input="setPolicyValue('maxDepth', Number($event.target.value))"
+                    />
+                  </label>
+                  <label>
+                    <span>最大并行 Agent</span>
+                    <input
+                      :value="selectedPipeline.delegationPolicy.maxParallelAgents"
+                      type="number"
+                      min="1"
+                      max="8"
+                      @input="setPolicyValue('maxParallelAgents', Number($event.target.value))"
+                    />
+                  </label>
+                </div>
+              </div>
+
+              <div class="toolbar-group policy-card">
+                <div class="section-heading tight">
+                  <p>授权边界</p>
+                  <span>控制 Leader 能升级到什么程度。</span>
+                </div>
+                <button
+                  :class="['policy-toggle', { active: selectedPipeline.delegationPolicy.allowSubAgents }]"
+                  type="button"
+                  @click="togglePolicyFlag('allowSubAgents')"
+                >
+                  允许创建 Sub Agent
+                </button>
+                <button
+                  :class="['policy-toggle', { active: selectedPipeline.delegationPolicy.allowAgentTeam }]"
+                  type="button"
+                  @click="togglePolicyFlag('allowAgentTeam')"
+                >
+                  允许启动 Agent Team
+                </button>
+                <button
+                  :class="['policy-toggle', { active: selectedPipeline.delegationPolicy.allowRecursiveDelegation }]"
+                  type="button"
+                  @click="togglePolicyFlag('allowRecursiveDelegation')"
+                >
+                  允许递归委托
+                </button>
+              </div>
+
+              <div class="toolbar-group policy-card approval-card">
+                <div class="section-heading tight">
+                  <p>人工确认点</p>
+                  <span>这些动作必须回到人类确认。</span>
+                </div>
+                <div class="approval-list">
+                  <button
+                    v-for="approval in approvalOptions"
+                    :key="approval.key"
+                    :class="[
+                      'approval-chip',
+                      { active: selectedPipeline.delegationPolicy.requireHumanApprovalFor.includes(approval.key) },
+                    ]"
+                    type="button"
+                    @click="toggleApproval(approval.key)"
+                  >
+                    {{ approval.label }}
+                  </button>
+                </div>
+              </div>
+
+              <div class="toolbar-group policy-card rules-card">
+                <div class="section-heading tight">
+                  <p>升级规则</p>
+                  <span>会写入 Team Leader 的角色描述。</span>
+                </div>
+                <label>
+                  <span>自己干</span>
+                  <textarea v-model="selectedPipeline.delegationPolicy.escalationRules.self" rows="2"></textarea>
+                </label>
+                <label>
+                  <span>Sub Agent</span>
+                  <textarea v-model="selectedPipeline.delegationPolicy.escalationRules.subAgent" rows="2"></textarea>
+                </label>
+                <label>
+                  <span>Agent Team</span>
+                  <textarea v-model="selectedPipeline.delegationPolicy.escalationRules.team" rows="2"></textarea>
+                </label>
+                <label>
+                  <span>递归委托</span>
+                  <textarea v-model="selectedPipeline.delegationPolicy.escalationRules.recursive" rows="2"></textarea>
+                </label>
+              </div>
+
+              <div class="toolbar-status">决策模型会随同步写进 Team Leader</div>
+            </template>
           </div>
 
           <div v-if="activeMenu === 'agent'" class="panel-section">
@@ -963,6 +1264,27 @@ onMounted(() => {
             <strong>{{ currentRun?.pipeline?.projectPath }}</strong>
             <span>Claude Agent</span>
             <strong>{{ currentRun?.pipeline?.leaderAgentName }}</strong>
+            <span>决策模型</span>
+            <strong>
+              {{ currentRun?.pipeline?.delegationPolicy?.defaultMode }}
+              · Depth {{ currentRun?.pipeline?.delegationPolicy?.maxDepth }}
+              · Parallel {{ currentRun?.pipeline?.delegationPolicy?.maxParallelAgents }}
+            </strong>
+          </div>
+          <div v-if="activePreflightChecks.length" class="run-checks">
+            <div class="section-heading tight">
+              <p>启动前检查</p>
+              <span>失败项会阻止运行，警告项会保留在这里供确认。</span>
+            </div>
+            <div
+              v-for="check in activePreflightChecks"
+              :key="check.id"
+              :class="['run-check-card', check.status]"
+            >
+              <strong>{{ check.label }}</strong>
+              <span>{{ check.status }}</span>
+              <p>{{ check.detail }}</p>
+            </div>
           </div>
           <button class="primary-button launch-button" type="button" @click="openInITerm">一键打开 iTerm2</button>
           <div class="toolbar-status">{{ launchStatus }}</div>

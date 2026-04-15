@@ -9,6 +9,21 @@ const TMUX_BIN = process.env.TMUX_BIN || findTmuxBinary();
 const PROJECT_ROOT = path.resolve(process.cwd(), "..");
 const DEFINITION_PATH = path.join(PROJECT_ROOT, "configs", "agentflow.pipeline.json");
 const CLAUDE_AGENTS_DIR = "/Users/leo/.claude/agents";
+const DEFAULT_DELEGATION_POLICY = {
+  defaultMode: "self_first",
+  allowSubAgents: true,
+  allowAgentTeam: true,
+  allowRecursiveDelegation: true,
+  maxDepth: 2,
+  maxParallelAgents: 4,
+  requireHumanApprovalFor: ["architecture-review", "write-files", "destructive-command", "deployment"],
+  escalationRules: {
+    self: "任务小、路径清楚、上下文足够、单一产物时由当前 Agent 自己完成。",
+    subAgent: "子任务边界清楚、适合并行、需要隔离上下文或专业审查时创建 Sub Agent。",
+    team: "任务跨多个阶段/角色/产物，需要 Team Leader 拆解、调度、验收时启动 Agent Team。",
+    recursive: "子任务自身变成复杂项目，且父 Agent 能验收结果时，允许受控递归委托。",
+  },
+};
 const runs = new Map();
 
 const app = express();
@@ -32,6 +47,20 @@ app.get("/api/agents", (req, res) => {
   res.json({ agents: listClaudeAgents() });
 });
 
+app.post("/api/preflight", (req, res) => {
+  const pipeline = normalizePipeline(req.body?.pipeline);
+  if (!pipeline) {
+    res.status(400).json({ error: "pipeline is required" });
+    return;
+  }
+
+  const checks = buildPreflightChecks(pipeline);
+  res.json({
+    ok: !checks.some((check) => check.status === "fail"),
+    checks,
+  });
+});
+
 app.get("/api/definition", (req, res) => {
   const definition = readDefinition();
   if (!definition) {
@@ -39,6 +68,16 @@ app.get("/api/definition", (req, res) => {
     return;
   }
   res.json(definition);
+});
+
+app.post("/api/definition/preview", (req, res) => {
+  const pipeline = normalizePipeline(req.body?.pipeline);
+  if (!pipeline) {
+    res.status(400).json({ error: "pipeline is required" });
+    return;
+  }
+
+  res.json(buildDefinitionPreview(pipeline));
 });
 
 app.post("/api/definition", (req, res) => {
@@ -141,6 +180,83 @@ function checkTmux() {
   return { ok: false, error: result.stderr || result.error?.message || "tmux not found" };
 }
 
+function buildPreflightChecks(pipeline) {
+  const leaderAgentName = pipeline.leaderAgentName || toLeaderAgentName(pipeline.name);
+  const leaderPath = getAgentPath(leaderAgentName);
+  const sharedAgents = pipeline.stages.flatMap((stage) =>
+    stage.agents.filter((agent) => agent.source === "shared").map((agent) => agent.agentName)
+  );
+  const missingSharedAgents = sharedAgents.filter((agentName) => !fs.existsSync(getAgentPath(agentName)));
+  const claudeBinary = findExecutable("claude", [
+    "/Users/leo/.local/bin/claude",
+    "/opt/homebrew/bin/claude",
+    "/usr/local/bin/claude",
+    "/usr/bin/claude",
+  ]);
+  const iTermAvailable = checkITerm().ok;
+  const projectPathExists = fs.existsSync(pipeline.projectPath) && fs.statSync(pipeline.projectPath).isDirectory();
+  const agentsDirExists = fs.existsSync(CLAUDE_AGENTS_DIR);
+
+  return [
+    {
+      id: "project-path",
+      label: "项目地址",
+      status: projectPathExists ? "pass" : "fail",
+      detail: projectPathExists ? pipeline.projectPath : `项目目录不存在：${pipeline.projectPath}`,
+    },
+    {
+      id: "claude-cli",
+      label: "Claude CLI",
+      status: claudeBinary ? "pass" : "fail",
+      detail: claudeBinary || "未找到 claude 命令，请确认 Claude CLI 已安装并在 PATH 中",
+    },
+    {
+      id: "iterm2",
+      label: "iTerm2",
+      status: iTermAvailable ? "pass" : "fail",
+      detail: iTermAvailable ? "iTerm2 可通过 AppleScript 调用" : "未找到 iTerm2 或 AppleScript 无法访问",
+    },
+    {
+      id: "agents-dir",
+      label: "Claude agents 目录",
+      status: agentsDirExists && canWriteDirectory(CLAUDE_AGENTS_DIR) ? "pass" : "fail",
+      detail: agentsDirExists ? CLAUDE_AGENTS_DIR : `目录不存在：${CLAUDE_AGENTS_DIR}`,
+    },
+    {
+      id: "leader-agent",
+      label: "Team Leader Agent",
+      status: fs.existsSync(leaderPath) ? "pass" : "warn",
+      detail: fs.existsSync(leaderPath)
+        ? leaderPath
+        : `同步 Agents 后会创建：${leaderPath}`,
+    },
+    {
+      id: "shared-agents",
+      label: "共享 Agent 引用",
+      status: missingSharedAgents.length ? "fail" : "pass",
+      detail: missingSharedAgents.length
+        ? `缺失共享 Agent：${missingSharedAgents.join(", ")}`
+        : sharedAgents.length
+          ? `已找到 ${sharedAgents.length} 个共享 Agent`
+          : "当前流水线未引用共享 Agent",
+    },
+  ];
+}
+
+function buildDefinitionPreview(pipeline) {
+  const leaderAgentName = pipeline.leaderAgentName || toLeaderAgentName(pipeline.name);
+  const leaderPath = getAgentPath(leaderAgentName);
+  const nextMarkdown = renderTeamLeaderAgent(pipeline);
+  const currentMarkdown = fs.existsSync(leaderPath) ? fs.readFileSync(leaderPath, "utf8") : "";
+  return {
+    leaderAgentName,
+    leaderPath,
+    nextMarkdown,
+    currentMarkdown,
+    changed: nextMarkdown !== currentMarkdown,
+  };
+}
+
 function normalizePipeline(value) {
   if (!value || typeof value !== "object" || !value.name) return null;
   return {
@@ -148,6 +264,7 @@ function normalizePipeline(value) {
     name: String(value.name),
     leaderAgentName: String(value.leaderAgentName || toLeaderAgentName(value.name)),
     projectPath: String(value.projectPath || process.cwd()),
+    delegationPolicy: normalizeDelegationPolicy(value.delegationPolicy),
     stages: Array.isArray(value.stages)
       ? value.stages.map((stage) => ({
           id: String(stage.id || ""),
@@ -198,6 +315,39 @@ function findTmuxBinary() {
   }
 
   return "";
+}
+
+function findExecutable(name, extraCandidates = []) {
+  const pathCandidates = (process.env.PATH || "")
+    .split(":")
+    .filter(Boolean)
+    .map((entry) => `${entry}/${name}`);
+  const candidates = [...pathCandidates, ...extraCandidates];
+
+  for (const candidate of candidates) {
+    if (!candidate || !fs.existsSync(candidate)) continue;
+    const result = spawnSync(candidate, ["--version"], { encoding: "utf8" });
+    if (result.status === 0) return candidate;
+  }
+
+  return "";
+}
+
+function checkITerm() {
+  const result = spawnSync("osascript", ["-e", 'id of application "iTerm2"'], { encoding: "utf8" });
+  return {
+    ok: result.status === 0,
+    detail: result.stdout.trim() || result.stderr.trim(),
+  };
+}
+
+function canWriteDirectory(directory) {
+  try {
+    fs.accessSync(directory, fs.constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function buildITermAppleScript(run, requirement) {
@@ -257,6 +407,9 @@ function buildRunSummary(run, requirement) {
     `Leader agent: ${pipeline.leaderAgentName || toLeaderAgentName(pipeline.name)}`,
     `Project: ${pipeline.projectPath}`,
     "",
+    "Delegation policy:",
+    JSON.stringify(pipeline.delegationPolicy || normalizeDelegationPolicy(), null, 2),
+    "",
     "Stages:",
     stages || "No stages configured.",
     "",
@@ -300,7 +453,7 @@ function writeClaudeAgents(definition) {
   const generated = [];
 
   const teamLeader = renderTeamLeaderAgent(pipeline);
-  const teamLeaderPath = path.join(CLAUDE_AGENTS_DIR, `${pipeline.leaderAgentName || toLeaderAgentName(pipeline.name)}.md`);
+  const teamLeaderPath = getAgentPath(pipeline.leaderAgentName || toLeaderAgentName(pipeline.name));
   fs.writeFileSync(teamLeaderPath, teamLeader);
   generated.push(teamLeaderPath);
 
@@ -309,13 +462,17 @@ function writeClaudeAgents(definition) {
       if (agent.source === "shared") {
         continue;
       }
-      const agentPath = path.join(CLAUDE_AGENTS_DIR, `${agent.agentName}.md`);
+      const agentPath = getAgentPath(agent.agentName);
       fs.writeFileSync(agentPath, renderRoleAgent(pipeline, stage, agent));
       generated.push(agentPath);
     }
   }
 
   return generated;
+}
+
+function getAgentPath(agentName) {
+  return path.join(CLAUDE_AGENTS_DIR, `${agentName}.md`);
 }
 
 function renderTeamLeaderAgent(pipeline) {
@@ -339,10 +496,40 @@ Execution rules:
 - Start by restating the user requirement and mapping it to the pipeline stages.
 - Use the configured agents, responsibilities, and skills as your delegation model.
 - Shared agents are referenced by name and must not be rewritten by this pipeline.
+- Apply the delegationPolicy strictly: start simple, escalate only when the rules justify it.
+- Never exceed maxDepth or maxParallelAgents. If deeper delegation is needed, ask the user first.
+- Any action listed in requireHumanApprovalFor must become an explicit human checkpoint before execution.
 - Treat each stage boundary as a human review gate.
 - Keep decisions, risks, and deliverables traceable.
 - If a configured agent is not available as a live subagent, simulate delegation by producing that agent's expected output section.
 `;
+}
+
+function normalizeDelegationPolicy(policy = {}) {
+  const rules = policy.escalationRules || {};
+  return {
+    defaultMode: String(policy.defaultMode || DEFAULT_DELEGATION_POLICY.defaultMode),
+    allowSubAgents: policy.allowSubAgents !== false,
+    allowAgentTeam: policy.allowAgentTeam !== false,
+    allowRecursiveDelegation: policy.allowRecursiveDelegation !== false,
+    maxDepth: clampNumber(policy.maxDepth, 1, 3, DEFAULT_DELEGATION_POLICY.maxDepth),
+    maxParallelAgents: clampNumber(policy.maxParallelAgents, 1, 8, DEFAULT_DELEGATION_POLICY.maxParallelAgents),
+    requireHumanApprovalFor: Array.isArray(policy.requireHumanApprovalFor)
+      ? policy.requireHumanApprovalFor.map(String)
+      : [...DEFAULT_DELEGATION_POLICY.requireHumanApprovalFor],
+    escalationRules: {
+      self: String(rules.self || DEFAULT_DELEGATION_POLICY.escalationRules.self),
+      subAgent: String(rules.subAgent || DEFAULT_DELEGATION_POLICY.escalationRules.subAgent),
+      team: String(rules.team || DEFAULT_DELEGATION_POLICY.escalationRules.team),
+      recursive: String(rules.recursive || DEFAULT_DELEGATION_POLICY.escalationRules.recursive),
+    },
+  };
+}
+
+function clampNumber(value, min, max, fallback) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(max, Math.max(min, number));
 }
 
 function renderRoleAgent(pipeline, stage, agent) {

@@ -5,6 +5,26 @@
     "name": "核心研发流程",
     "leaderAgentName": "agentflow-core-rd-team-leader",
     "projectPath": "/Users/leo/Projects/agentflow-platform",
+    "delegationPolicy": {
+      "defaultMode": "self_first",
+      "allowSubAgents": true,
+      "allowAgentTeam": true,
+      "allowRecursiveDelegation": true,
+      "maxDepth": 2,
+      "maxParallelAgents": 4,
+      "requireHumanApprovalFor": [
+        "architecture-review",
+        "write-files",
+        "destructive-command",
+        "deployment"
+      ],
+      "escalationRules": {
+        "self": "任务小、路径清楚、上下文足够、单一产物时由当前 Agent 自己完成。",
+        "subAgent": "子任务边界清楚、适合并行、需要隔离上下文或专业审查时创建 Sub Agent。",
+        "team": "任务跨多个阶段/角色/产物，需要 Team Leader 拆解、调度、验收时启动 Agent Team。",
+        "recursive": "子任务自身变成复杂项目，且父 Agent 能验收结果时，允许受控递归委托。"
+      }
+    },
     "stages": [
       {
         "id": "s1",

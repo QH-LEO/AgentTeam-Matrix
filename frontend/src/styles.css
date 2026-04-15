@@ -316,6 +316,114 @@ button {
   background: rgba(127, 29, 29, 0.36);
 }
 
+.preflight-strip {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 28px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(15, 23, 42, 0.58);
+}
+
+.preflight-strip > span {
+  color: var(--green);
+  font-size: 13px;
+}
+
+.preflight-strip > span.warn {
+  color: #fbbf24;
+}
+
+.preflight-strip > span.danger {
+  color: #fb7185;
+}
+
+.preflight-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.preflight-chip,
+.preview-state {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+}
+
+.preflight-chip.pass {
+  color: #bbf7d0;
+  background: rgba(34, 197, 94, 0.14);
+}
+
+.preflight-chip.warn,
+.preview-state.changed {
+  color: #fde68a;
+  background: rgba(245, 158, 11, 0.15);
+}
+
+.preflight-chip.fail {
+  color: #fecdd3;
+  background: rgba(244, 63, 94, 0.16);
+}
+
+.definition-preview {
+  display: grid;
+  gap: 14px;
+  padding: 18px 28px;
+  border-bottom: 1px solid rgba(110, 231, 249, 0.14);
+  background: rgba(7, 13, 24, 0.92);
+}
+
+.preview-header,
+.preview-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.preview-header h3 {
+  margin: 6px 0;
+}
+
+.preview-header span {
+  color: var(--text-soft);
+  overflow-wrap: anywhere;
+}
+
+.preview-state {
+  color: #bbf7d0;
+  background: rgba(34, 197, 94, 0.14);
+}
+
+.preview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.preview-grid > div {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.preview-grid pre {
+  max-height: 320px;
+  margin: 0;
+  padding: 14px;
+  overflow: auto;
+  color: #cbd5e1;
+  border: 1px solid var(--line-soft);
+  border-radius: 16px;
+  background: rgba(2, 6, 23, 0.72);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 .workspace-body {
   min-height: 0;
   display: grid;
@@ -344,6 +452,10 @@ button {
   display: grid;
   gap: 12px;
   min-width: 260px;
+}
+
+.toolbar-group.wide {
+  min-width: 360px;
 }
 
 .toolbar-status {
@@ -437,6 +549,70 @@ button {
 .mini-card:hover {
   border-color: var(--line-strong);
   background: rgba(36, 115, 255, 0.08);
+}
+
+.policy-section {
+  align-items: stretch;
+}
+
+.policy-card {
+  padding: 16px;
+  border: 1px solid var(--line-soft);
+  border-radius: 18px;
+  background: rgba(15, 23, 42, 0.52);
+}
+
+.policy-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(120px, 1fr));
+  gap: 12px;
+}
+
+.policy-card label {
+  display: grid;
+  gap: 8px;
+  color: var(--text-soft);
+  font-size: 13px;
+}
+
+.policy-toggle,
+.approval-chip {
+  padding: 11px 13px;
+  color: var(--text-soft);
+  text-align: left;
+  border: 1px solid var(--line-soft);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.policy-toggle.active,
+.approval-chip.active {
+  color: #eaf6ff;
+  border-color: rgba(52, 211, 153, 0.38);
+  background: rgba(52, 211, 153, 0.12);
+}
+
+.approval-card {
+  min-width: 340px;
+}
+
+.approval-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.approval-chip {
+  text-align: center;
+}
+
+.rules-card {
+  min-width: 520px;
+}
+
+.rules-card textarea {
+  min-height: 72px;
+  resize: vertical;
 }
 
 .mini-tag-list {
@@ -899,6 +1075,48 @@ textarea:focus {
   overflow-wrap: anywhere;
 }
 
+.run-checks {
+  display: grid;
+  gap: 10px;
+}
+
+.run-check-card {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 12px;
+  padding: 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 14px;
+  background: rgba(15, 23, 42, 0.5);
+}
+
+.run-check-card span {
+  color: var(--text-dim);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.run-check-card p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.run-check-card.pass {
+  border-color: rgba(34, 197, 94, 0.24);
+}
+
+.run-check-card.warn {
+  border-color: rgba(245, 158, 11, 0.28);
+}
+
+.run-check-card.fail {
+  border-color: rgba(244, 63, 94, 0.32);
+}
+
 .launch-button {
   justify-self: start;
 }
@@ -923,6 +1141,10 @@ textarea:focus {
 
   .run-console {
     grid-template-columns: 220px 1fr;
+  }
+
+  .preview-grid {
+    grid-template-columns: 1fr;
   }
 
   .requirement-panel {
