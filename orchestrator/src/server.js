@@ -2,7 +2,7 @@ import express from "express";
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 
 const PORT = Number(process.env.PORT || 8787);
 const TMUX_BIN = process.env.TMUX_BIN || findTmuxBinary();
@@ -153,15 +153,20 @@ app.post("/api/runs/:runId/open-iterm", (req, res) => {
   run.requirement = requirement;
 
   const script = buildITermAppleScript(run, requirement);
-  const result = spawnSync("osascript", ["-e", script], { encoding: "utf8" });
-  if (result.status !== 0) {
-    res.status(500).json({ error: "failed to open iTerm2", detail: result.stderr || result.stdout });
-    return;
-  }
+  run.status = "opening";
+  run.openingAt = new Date().toISOString();
 
-  run.status = "opened";
-  run.openedAt = new Date().toISOString();
-  res.json(run);
+  runAppleScript(script, 5000)
+    .then(() => {
+      run.status = "opened";
+      run.openedAt = new Date().toISOString();
+      res.json(run);
+    })
+    .catch((error) => {
+      run.status = "open_failed";
+      run.openError = error.message;
+      res.status(500).json({ error: "failed to open iTerm2", detail: error.message, run });
+    });
 });
 
 const server = http.createServer(app);
@@ -372,6 +377,45 @@ function checkITerm() {
     ok: result.status === 0,
     detail: result.stdout.trim() || result.stderr.trim(),
   };
+}
+
+function runAppleScript(script, timeoutMs = 5000) {
+  return new Promise((resolve, reject) => {
+    const child = spawn("osascript", ["-e", script], { stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill("SIGTERM");
+      reject(new Error(`iTerm2 启动超时（${timeoutMs}ms），请检查 macOS 自动化授权或 iTerm2 状态`));
+    }, timeoutMs);
+
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on("error", (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.on("close", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (code === 0) {
+        resolve(stdout);
+        return;
+      }
+      reject(new Error(stderr || stdout || `osascript exited with code ${code}`));
+    });
+  });
 }
 
 function canWriteDirectory(directory) {

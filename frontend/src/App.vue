@@ -167,6 +167,7 @@ const requirementText = ref("");
 const runError = ref("");
 const runStarting = ref(false);
 const syncingDefinition = ref(false);
+const launchingITerm = ref(false);
 const currentRun = ref(null);
 const launchStatus = ref("等待填写需求");
 const availableClaudeAgents = ref([]);
@@ -654,8 +655,9 @@ async function savePipelineDefinition(pipeline) {
 }
 
 async function openInITerm() {
-  if (!currentRun.value?.runId) return;
+  if (!currentRun.value?.runId || launchingITerm.value) return;
   const text = requirementText.value.trim();
+  launchingITerm.value = true;
   launchStatus.value = "正在打开 iTerm2...";
 
   try {
@@ -672,6 +674,8 @@ async function openInITerm() {
     launchStatus.value = "已打开 iTerm2，Claude 已在项目目录启动";
   } catch (error) {
     launchStatus.value = error.message;
+  } finally {
+    launchingITerm.value = false;
   }
 }
 
@@ -1298,7 +1302,9 @@ onMounted(() => {
               <p>{{ check.detail }}</p>
             </div>
           </div>
-          <button class="primary-button launch-button" type="button" @click="openInITerm">一键打开 iTerm2</button>
+          <button class="primary-button launch-button" type="button" :disabled="launchingITerm" @click="openInITerm">
+            {{ launchingITerm ? "打开中..." : "一键打开 iTerm2" }}
+          </button>
           <div class="toolbar-status">{{ launchStatus }}</div>
         </section>
 
@@ -1309,7 +1315,9 @@ onMounted(() => {
             rows="8"
             placeholder="输入需求，例如：实现手机号验证码登录，包含发送验证码、登录态和失败提示。"
           ></textarea>
-          <button class="primary-button" type="button" @click="openInITerm">一键启动</button>
+          <button class="primary-button" type="button" :disabled="launchingITerm" @click="openInITerm">
+            {{ launchingITerm ? "启动中..." : "一键启动" }}
+          </button>
           <div class="requirement-tip">
             这段需求会作为 Claude 启动 prompt 的一部分传入 iTerm2。
           </div>
