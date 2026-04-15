@@ -433,6 +433,9 @@ function buildITermAppleScript(run, requirement) {
 tell application "iTerm2"
   activate
   set newWindow to (create window with default profile)
+  try
+    tell newWindow to set fullscreen to true
+  end try
   tell current session of newWindow
     write text ${appleScriptString(command)}
   end tell
