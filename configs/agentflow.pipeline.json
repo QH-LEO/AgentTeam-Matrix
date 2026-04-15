@@ -1,0 +1,119 @@
+{
+  "version": 1,
+  "pipeline": {
+    "id": "p1",
+    "name": "核心研发流程",
+    "leaderAgentName": "agentflow-core-rd-team-leader",
+    "projectPath": "/Users/leo/Projects/agentflow-platform",
+    "stages": [
+      {
+        "id": "s1",
+        "name": "需求分析",
+        "agents": [
+          {
+            "id": "a1",
+            "name": "产品经理",
+            "agentName": "agentflow-product-manager",
+            "description": "Turns raw requirements into scoped product requirements, user stories, acceptance criteria, and review checkpoints.",
+            "responsibility": "定义产品边界、业务目标和可验收的用户故事。",
+            "source": "shared",
+            "model": "sonnet",
+            "tools": [
+              "Read",
+              "Write",
+              "Edit",
+              "Grep",
+              "Glob"
+            ],
+            "skills": [
+              {
+                "id": "sk1",
+                "name": "user_story",
+                "version": "1.0.0"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "s2",
+        "name": "技术方案",
+        "agents": [
+          {
+            "id": "a2",
+            "name": "架构师",
+            "agentName": "agentflow-architect",
+            "description": "Produces technical plans, system boundaries, interfaces, risks, and implementation sequencing for AgentFlow runs.",
+            "responsibility": "设计系统边界、核心模块和接口契约。",
+            "source": "shared",
+            "model": "sonnet",
+            "tools": [
+              "Read",
+              "Write",
+              "Edit",
+              "Grep",
+              "Glob",
+              "Bash"
+            ],
+            "skills": [
+              {
+                "id": "sk2",
+                "name": "architecture_review",
+                "version": "1.2.0"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "s3",
+        "name": "开发实现",
+        "agents": [
+          {
+            "id": "a3",
+            "name": "开发工程师",
+            "agentName": "agentflow-developer",
+            "description": "Implements scoped changes from AgentFlow plans while preserving existing user edits and project conventions.",
+            "responsibility": "按批准方案实现代码、保持小步提交、运行必要检查。",
+            "source": "shared",
+            "model": "sonnet",
+            "tools": [
+              "Read",
+              "Write",
+              "Edit",
+              "MultiEdit",
+              "Grep",
+              "Glob",
+              "Bash"
+            ],
+            "skills": []
+          }
+        ]
+      },
+      {
+        "id": "s4",
+        "name": "测试验收",
+        "agents": [
+          {
+            "id": "a4",
+            "name": "测试工程师",
+            "agentName": "agentflow-tester",
+            "description": "Designs and runs validation for AgentFlow outputs, including acceptance checks, regression tests, and risk-focused review.",
+            "responsibility": "根据验收标准验证产物，输出风险、缺陷和回归测试建议。",
+            "source": "shared",
+            "model": "sonnet",
+            "tools": [
+              "Read",
+              "Write",
+              "Edit",
+              "Grep",
+              "Glob",
+              "Bash"
+            ],
+            "skills": []
+          }
+        ]
+      }
+    ]
+  }
+}

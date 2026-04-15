@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pipeline Studio | AgentTeam Matrix</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        body { background-color: #0f1115; color: #e2e8f0; font-family: 'Inter', sans-serif; }
+        .sidebar-item-active { background: rgba(59, 130, 246, 0.1); border-right: 3px solid #3b82f6; color: #3b82f6; }
+        .glass-panel { background: rgba(30, 41, 59, 0.5); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }
+        .flow-line { stroke: #334155; stroke-width: 2; fill: none; stroke-dasharray: 4; animation: flow 20s linear infinite; }
+        @keyframes flow { from { stroke-dashoffset: 100; } to { stroke-dashoffset: 0; } }
+        .node-card { border: 1px solid #334155; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+        .node-card:hover { border-color: #3b82f6; box-shadow: 0 0 15px rgba(59, 130, 246, 0.2); }
+        .active-path { stroke: #3b82f6; stroke-width: 3; stroke-dasharray: none; filter: drop-shadow(0 0 5px rgba(59, 130, 246, 0.5)); }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 10px; }
+    </style>
+</head>
+<body>
+    <div id="app" class="flex h-screen overflow-hidden">
+        <aside class="w-64 glass-panel flex flex-col z-20">
+            <div class="p-6">
+                <h1 class="text-xl font-bold tracking-tighter text-blue-500">MATRIX <span class="text-slate-400">STUDIO</span></h1>
+            </div>
+            
+            <nav class="flex-1 px-4 space-y-2 mt-4">
+                <button v-for="item in menuItems" :key="item.key" 
+                    @click="activeMenu = item.key"
+                    :class="['w-full flex items-center px-4 py-3 rounded-lg transition-all', activeMenu === item.key ? 'sidebar-item-active' : 'hover:bg-slate-800 text-slate-400']">
+                    <i :class="['fas mr-3', item.icon]"></i>
+                    <span class="text-sm font-medium">{{ item.label }}</span>
+                </button>
+            </nav>
+
+            <div class="p-4 border-t border-slate-800">
+                <div class="text-xs text-slate-500 uppercase mb-2 px-2">当前环境</div>
+                <div class="flex items-center px-2 py-1 bg-green-500/10 text-green-500 rounded text-xs">
+                    <span class="w-2 h-2 bg-green-500 rounded-full mr-2 animate-pulse"></span>
+                    Ready - Pipeline Engine
+                </div>
+            </div>
+        </aside>
+
+        <main class="flex-1 flex flex-col relative overflow-hidden">
+            <header class="h-16 border-b border-slate-800 flex items-center justify-between px-8 bg-slate-900/50">
+                <div class="flex items-center space-x-4">
+                    <h2 class="text-lg font-semibold">{{ currentMenuLabel }}</h2>
+                    <span class="text-slate-600">/</span>
+                    <div class="flex items-center bg-slate-800 px-3 py-1 rounded-full border border-slate-700">
+                        <span class="text-xs text-slate-400 mr-2">当前流水线:</span>
+                        <span class="text-xs text-blue-400 font-mono">{{ selectedPipeline ? selectedPipeline.name : '未选择' }}</span>
+                    </div>
+                </div>
+                <div class="flex space-x-2">
+                    <button class="bg-blue-600 hover:bg-blue-500 px-4 py-1.5 rounded text-sm font-medium transition-colors">发布流程</button>
+                </div>
+            </header>
+
+            <div class="flex-1 flex overflow-hidden">
+                <section class="w-80 border-right border-slate-800 p-6 overflow-y-auto bg-[#13151a]">
+                    
+                    <div v-if="activeMenu === 'pipeline'" class="space-y-6">
+                        <div class="space-y-2">
+                            <label class="text-xs text-slate-500 uppercase font-bold">新建流水线</label>
+                            <div class="flex gap-2">
+                                <input v-model="forms.pipelineName" type="text" placeholder="例如：核心研发流程" class="flex-1 bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500">
+                                <button @click="createPipeline" class="bg-slate-700 px-3 rounded hover:bg-slate-600">+</button>
+                            </div>
+                        </div>
+                        <div class="space-y-2">
+                            <label class="text-xs text-slate-500 uppercase font-bold">流水线列表 ({{ pipelines.length }})</label>
+                            <div v-for="p in pipelines" :key="p.id" 
+                                @click="selectPipeline(p)"
+                                :class="['p-4 rounded-lg cursor-pointer border transition-all', selectedPipelineId === p.id ? 'border-blue-500 bg-blue-500/5' : 'border-slate-800 bg-slate-800/30 hover:bg-slate-800']">
+                                <div class="font-medium text-sm">{{ p.name }}</div>
+                                <div class="text-xs text-slate-500 mt-1">Stages: {{ p.stages.length }}</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div v-if="activeMenu === 'stage'" class="space-y-6">
+                        <div v-if="!selectedPipeline" class="text-sm text-slate-500 italic">请先在「流水线管理」里创建或选择一条流水线。</div>
+                        <div v-else class="space-y-6">
+                            <div class="space-y-2">
+                                <label class="text-xs text-slate-500 uppercase font-bold">添加阶段</label>
+                                <input v-model="forms.stageName" @keyup.enter="addStage" type="text" placeholder="阶段名称，如：技术方案" class="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500">
+                                <button @click="addStage" class="w-full bg-blue-600/20 text-blue-400 border border-blue-500/30 py-2 rounded text-sm hover:bg-blue-600/30">添加阶段节点</button>
+                            </div>
+                            <div class="space-y-2">
+                                <label class="text-xs text-slate-500 uppercase font-bold">当前流水线阶段</label>
+                                <div v-for="(s, index) in selectedPipeline.stages" :key="s.id" class="flex items-center bg-slate-800 p-3 rounded-lg border border-slate-700 mb-2">
+                                    <span class="w-6 h-6 rounded-full bg-slate-700 flex items-center justify-center text-xs mr-3">{{ index + 1 }}</span>
+                                    <span class="text-sm">{{ s.name }}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div v-if="activeMenu === 'agent'" class="space-y-6">
+                        <div v-if="!hasStages" class="text-sm text-slate-500 italic">请先添加阶段，再开始编辑 Agent 职责。</div>
+                        <div v-else class="space-y-4">
+                            <select v-model="forms.agentStageId" class="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm">
+                                <option value="" disabled>选择所属阶段</option>
+                                <option v-for="s in selectedPipeline.stages" :value="s.id">{{ s.name }}</option>
+                            </select>
+                            <input v-model="forms.agentName" type="text" placeholder="Agent 名称" class="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm">
+                            <textarea v-model="forms.agentResp" rows="3" placeholder="职责描述：目标、边界..." class="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm"></textarea>
+                            <button @click="addAgent" class="w-full bg-blue-600 py-2 rounded text-sm">确认添加 Agent</button>
+                        </div>
+                    </div>
+
+                    <div v-if="activeMenu === 'skill'" class="space-y-6">
+                        <div v-if="!hasAgents" class="text-sm text-slate-500 italic">请先创建阶段和 Agent，再进行 Skill 装配。</div>
+                        <div v-else class="space-y-4">
+                            <select v-model="forms.skillStageId" @change="forms.skillAgentId = ''" class="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm text-slate-300">
+                                <option value="" disabled>选择阶段</option>
+                                <option v-for="s in selectedPipeline.stages" :value="s.id">{{ s.name }}</option>
+                            </select>
+                            <select v-model="forms.skillAgentId" class="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm text-slate-300">
+                                <option value="" disabled>选择 Agent</option>
+                                <option v-for="a in availableAgentsForSkill" :value="a.id">{{ a.name }}</option>
+                            </select>
+                            <div class="flex gap-2">
+                                <input v-model="forms.skillName" type="text" placeholder="Skill 名称" class="flex-1 bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm">
+                                <input v-model="forms.skillVersion" type="text" class="w-16 bg-slate-800 border border-slate-700 rounded px-2 py-2 text-sm text-center">
+                            </div>
+                            <button @click="addSkill" class="w-full bg-indigo-600 py-2 rounded text-sm">装配到 Agent</button>
+                        </div>
+                    </div>
+
+                </section>
+
+                <section class="flex-1 bg-[#0a0c10] relative overflow-auto p-12 flex items-start justify-center">
+                    
+                    <svg class="absolute inset-0 w-full h-full pointer-events-none">
+                        <g v-if="selectedPipeline">
+                            <path v-for="(path, i) in flowPaths" :key="i" :d="path.d" 
+                                :class="['flow-line', activeMenu === path.type ? 'active-path' : '']" />
+                        </g>
+                    </svg>
+
+                    <div v-if="selectedPipeline" class="flex items-start space-x-24 relative z-10">
+                        <div v-for="(stage, sIdx) in selectedPipeline.stages" :key="stage.id" class="flex flex-col items-center space-y-8">
+                            
+                            <div :class="['node-card w-48 p-4 rounded-xl bg-slate-900 flex flex-col items-center relative shadow-2xl', activeMenu === 'stage' ? 'border-blue-500 shadow-blue-500/20' : '']">
+                                <div class="w-10 h-10 bg-blue-500/20 rounded-lg flex items-center justify-center text-blue-400 mb-2">
+                                    <i class="fas fa-layer-group"></i>
+                                </div>
+                                <span class="text-xs font-bold uppercase tracking-widest text-slate-500 mb-1">STAGE {{ sIdx + 1 }}</span>
+                                <span class="text-sm font-semibold">{{ stage.name }}</span>
+                            </div>
+
+                            <div class="flex flex-col space-y-4">
+                                <div v-for="agent in stage.agents" :key="agent.id" 
+                                    :class="['node-card w-56 p-4 rounded-lg bg-slate-800/80 border-l-4 shadow-xl', activeMenu === 'agent' ? 'border-l-blue-500' : 'border-l-slate-600']">
+                                    <div class="flex justify-between items-start mb-2">
+                                        <span class="text-sm font-bold text-blue-400">{{ agent.name }}</span>
+                                        <i class="fas fa-robot text-slate-500 text-xs"></i>
+                                    </div>
+                                    <textarea v-model="agent.responsibility" class="w-full bg-transparent text-xs text-slate-400 leading-relaxed focus:outline-none resize-none" rows="2"></textarea>
+                                    
+                                    <div class="mt-3 flex flex-wrap gap-1">
+                                        <div v-for="skill in agent.skills" :key="skill.name" class="px-2 py-0.5 bg-indigo-500/10 border border-indigo-500/30 rounded text-[10px] text-indigo-300">
+                                            {{ skill.name }} v{{ skill.version }}
+                                        </div>
+                                        <div v-if="agent.skills.length === 0" class="text-[10px] text-slate-600 italic">No Skills</div>
+                                    </div>
+                                </div>
+                                <div v-if="stage.agents.length === 0" class="w-56 h-20 border-2 border-dashed border-slate-800 rounded-lg flex items-center justify-center text-xs text-slate-600">
+                                    等待添加 Agent
+                                </div>
+                            </div>
+                        </div>
+
+                        <div v-if="selectedPipeline.stages.length === 0" class="flex flex-col items-center opacity-30 mt-20">
+                            <i class="fas fa-project-diagram text-6xl mb-4"></i>
+                            <p class="text-sm">在此处构建流程图</p>
+                        </div>
+                    </div>
+
+                    <div v-else class="flex flex-col items-center justify-center h-full text-slate-500">
+                        <div class="w-24 h-24 bg-slate-800 rounded-full flex items-center justify-center mb-6">
+                            <i class="fas fa-terminal text-3xl"></i>
+                        </div>
+                        <p class="text-lg font-light tracking-wide">请在左侧选择或创建一个流水线以开始</p>
+                    </div>
+
+                </section>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        const { createApp, reactive, toRefs, computed } = Vue;
+
+        createApp({
+            setup() {
+                const state = reactive({
+                    activeMenu: 'pipeline',
+                    selectedPipelineId: 'p1',
+                    menuItems: [
+                        { key: 'pipeline', label: '流水线管理', icon: 'fa-stream' },
+                        { key: 'stage', label: '阶段编排', icon: 'fa-project-diagram' },
+                        { key: 'agent', label: 'Agent 职责', icon: 'fa-robot' },
+                        { key: 'skill', label: 'Skill 管理', icon: 'fa-tools' }
+                    ],
+                    pipelines: [
+                        {
+                            id: 'p1',
+                            name: '核心研发流程',
+                            stages: [
+                                {
+                                    id: 's1', name: '需求分析',
+                                    agents: [{ id: 'a1', name: '产品经理', responsibility: '定义产品边界和核心需求', skills: [{ name: 'user_story', version: '1.0.0' }] }]
+                                },
+                                {
+                                    id: 's2', name: '技术方案',
+                                    agents: [{ id: 'a2', name: '架构师', responsibility: '设计系统架构与接口规范', skills: [] }]
+                                }
+                            ]
+                        }
+                    ],
+                    forms: {
+                        pipelineName: '',
+                        stageName: '',
+                        agentStageId: '',
+                        agentName: '',
+                        agentResp: '',
+                        skillStageId: '',
+                        skillAgentId: '',
+                        skillName: '',
+                        skillVersion: '1.0.0'
+                    }
+                });
+
+                // Computed
+                const selectedPipeline = computed(() => state.pipelines.find(p => p.id === state.selectedPipelineId));
+                const currentMenuLabel = computed(() => state.menuItems.find(m => m.key === state.activeMenu)?.label);
+                const hasStages = computed(() => selectedPipeline.value?.stages.length > 0);
+                const hasAgents = computed(() => selectedPipeline.value?.stages.some(s => s.agents.length > 0));
+                
+                const availableAgentsForSkill = computed(() => {
+                    if (!state.forms.skillStageId || !selectedPipeline.value) return [];
+                    const stage = selectedPipeline.value.stages.find(s => s.id === state.forms.skillStageId);
+                    return stage ? stage.agents : [];
+                });
+
+                // 流水线连线路径计算 (极简版)
+                const flowPaths = computed(() => {
+                    if (!selectedPipeline.value || selectedPipeline.value.stages.length < 2) return [];
+                    const paths = [];
+                    // 这里模拟了水平阶段之间的连接线
+                    for (let i = 0; i < selectedPipeline.value.stages.length - 1; i++) {
+                        const x1 = 400 + (i * 280);
+                        const y = 100;
+                        paths.push({
+                            type: 'stage',
+                            d: `M ${x1} ${y} L ${x1 + 100} ${y}`
+                        });
+                    }
+                    return paths;
+                });
+
+                // Methods
+                const selectPipeline = (p) => {
+                    state.selectedPipelineId = p.id;
+                    state.activeMenu = 'stage';
+                };
+
+                const createPipeline = () => {
+                    if (!state.forms.pipelineName) return;
+                    const newP = { id: Date.now().toString(), name: state.forms.pipelineName, stages: [] };
+                    state.pipelines.push(newP);
+                    state.selectedPipelineId = newP.id;
+                    state.forms.pipelineName = '';
+                };
+
+                const addStage = () => {
+                    if (!selectedPipeline.value || !state.forms.stageName) return;
+                    selectedPipeline.value.stages.push({
+                        id: 's' + Date.now(),
+                        name: state.forms.stageName,
+                        agents: []
+                    });
+                    state.forms.stageName = '';
+                };
+
+                const addAgent = () => {
+                    const stage = selectedPipeline.value.stages.find(s => s.id === state.forms.agentStageId);
+                    if (!stage || !state.forms.agentName) return;
+                    stage.agents.push({
+                        id: 'a' + Date.now(),
+                        name: state.forms.agentName,
+                        responsibility: state.forms.agentResp,
+                        skills: []
+                    });
+                    state.forms.agentName = '';
+                    state.forms.agentResp = '';
+                };
+
+                const addSkill = () => {
+                    const stage = selectedPipeline.value.stages.find(s => s.id === state.forms.skillStageId);
+                    const agent = stage?.agents.find(a => a.id === state.forms.skillAgentId);
+                    if (!agent || !state.forms.skillName) return;
+                    agent.skills.push({
+                        name: state.forms.skillName,
+                        version: state.forms.skillVersion
+                    });
+                    state.forms.skillName = '';
+                };
+
+                return {
+                    ...toRefs(state),
+                    selectedPipeline,
+                    currentMenuLabel,
+                    hasStages,
+                    hasAgents,
+                    availableAgentsForSkill,
+                    flowPaths,
+                    selectPipeline,
+                    createPipeline,
+                    addStage,
+                    addAgent,
+                    addSkill
+                };
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>

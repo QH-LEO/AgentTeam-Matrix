@@ -21,3 +21,8 @@
 - 初始化 `frontend/` 的 Vue 3 + TypeScript 工程。
 - 初始化 `backend/` API 骨架与配置存储。
 - 实现最小流水线编排与执行看板。
+
+## 当前可运行前端原型
+- 主入口：`frontend/index.html`（基于 `ui-state.js` 的轻量原型）
+- 可视化演示：`frontend/test-runner.html`（Tailwind + 流程画布，内置示例数据，用于体验「流水线即图」）
+- 本地启动：`./scripts/run-frontend.sh`，然后打开 `http://localhost:5173/index.html` 或 `http://localhost:5173/test-runner.html`

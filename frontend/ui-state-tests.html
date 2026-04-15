@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>UI State Tests</title>
+    <style>
+      body { font-family: sans-serif; padding: 16px; }
+      .ok { color: #118a2b; }
+      .fail { color: #c62828; }
+    </style>
+  </head>
+  <body>
+    <h1>前端状态层单元测试</h1>
+    <ul id="results"></ul>
+    <script src="./ui-state.js"></script>
+    <script>
+      const { createState, createPipeline, addStage, addAgent, attachSkill } = window.UIState;
+
+      const results = document.getElementById("results");
+      let failed = 0;
+
+      function test(name, fn) {
+        const li = document.createElement("li");
+        try {
+          fn();
+          li.textContent = `PASS: ${name}`;
+          li.className = "ok";
+        } catch (err) {
+          failed += 1;
+          li.textContent = `FAIL: ${name} -> ${err.message}`;
+          li.className = "fail";
+        }
+        results.appendChild(li);
+      }
+
+      function assert(condition, message) {
+        if (!condition) throw new Error(message);
+      }
+
+      test("创建流水线", () => {
+        const state = createState();
+        const p = createPipeline(state, "Pipeline A");
+        assert(!!p, "pipeline should be created");
+        assert(state.pipelines.length === 1, "pipeline length should be 1");
+      });
+
+      test("添加阶段并保持顺序", () => {
+        const state = createState();
+        const p = createPipeline(state, "P");
+        addStage(state, p.id, "需求");
+        addStage(state, p.id, "技术方案");
+        assert(p.stages[0].name === "需求", "stage order #1");
+        assert(p.stages[1].name === "技术方案", "stage order #2");
+      });
+
+      test("添加 Agent 并设置职责", () => {
+        const state = createState();
+        const p = createPipeline(state, "P");
+        const s = addStage(state, p.id, "需求");
+        const a = addAgent(state, p.id, s.id, "PM Agent", "拆需求");
+        assert(!!a, "agent should be created");
+        assert(s.agents[0].responsibility === "拆需求", "responsibility should match");
+      });
+
+      test("Agent 装配 Skill", () => {
+        const state = createState();
+        const p = createPipeline(state, "P");
+        const s = addStage(state, p.id, "需求");
+        const a = addAgent(state, p.id, s.id, "Domain Agent", "校验术语");
+        const sk = attachSkill(state, p.id, s.id, a.id, "term-normalizer", "1.0.0");
+        assert(!!sk, "skill should be created");
+        assert(a.skills.length === 1, "skill length should be 1");
+      });
+
+      const summary = document.createElement("p");
+      summary.textContent = failed === 0 ? "全部测试通过" : `失败 ${failed} 项`;
+      summary.className = failed === 0 ? "ok" : "fail";
+      document.body.appendChild(summary);
+    </script>
+  </body>
+</html>
