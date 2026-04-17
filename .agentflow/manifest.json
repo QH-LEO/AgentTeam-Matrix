@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "schemaVersion": 3,
+  "pipelineId": "p1",
+  "pipelineName": "核心研发流程",
+  "leaderAgentName": "agentflow-core-rd-team-leader",
+  "launchModes": [
+    "single-leader",
+    "suggest-team",
+    "force-team"
+  ],
+  "assets": [
+    ".agentflow/compiled/leader.md",
+    ".agentflow/compiled/sop.md",
+    ".agentflow/compiled/delegation-policy.md",
+    ".agentflow/compiled/launch-prompt.md",
+    ".claude/skills/using-agentflow/SKILL.md"
+  ]
+}

@@ -1,0 +1,103 @@
+<script setup>
+defineProps({
+  selectedPipeline: { type: Object, default: null },
+  hasStages: { type: Boolean, required: true },
+  forms: { type: Object, required: true },
+  sharedClaudeAgents: { type: Array, required: true },
+  focusedStage: { type: Object, default: null },
+  focusedAgentId: { type: String, required: true },
+  csvValue: { type: Function, required: true },
+});
+
+defineEmits(["add-agent", "focus-stage", "focus-agent", "set-csv-list"]);
+</script>
+
+<template>
+  <div class="panel-section agent-section">
+    <div v-if="!hasStages" class="panel-empty">请先添加阶段，再开始编辑 Agent 职责。</div>
+    <template v-else>
+      <div class="section-heading">
+        <p>新增 Agent</p>
+        <span>优先复用 Claude agents；没有合适的再新建托管 Agent。</span>
+      </div>
+      <div class="stack-form">
+        <select
+          v-model="forms.agentStageId"
+          @change="$emit('focus-stage', selectedPipeline.stages.find((stage) => stage.id === forms.agentStageId))"
+        >
+          <option value="" disabled>选择所属阶段</option>
+          <option v-for="stage in selectedPipeline.stages" :key="stage.id" :value="stage.id">
+            {{ stage.name }}
+          </option>
+        </select>
+        <select v-model="forms.sharedAgentName">
+          <option value="">新建 Agent，不复用</option>
+          <option v-for="agent in sharedClaudeAgents" :key="agent.name" :value="agent.name">
+            {{ agent.name }} · {{ agent.description || "无描述" }}
+          </option>
+        </select>
+        <input
+          v-model="forms.agentName"
+          type="text"
+          :disabled="!!forms.sharedAgentName"
+          placeholder="新建 Agent 名称"
+        />
+        <textarea
+          v-model="forms.agentResp"
+          rows="4"
+          placeholder="在本流水线里的职责补充：目标、边界、交付标准"
+        ></textarea>
+        <button class="primary-button" type="button" @click="$emit('add-agent')">确认添加 Agent</button>
+      </div>
+
+      <div class="toolbar-group context-summary-card">
+        <div class="section-heading tight">
+          <p>编辑上下文</p>
+          <span>{{ focusedStage ? `当前阶段：${focusedStage.name}` : "未选择阶段" }}</span>
+        </div>
+        <div v-if="focusedStage" class="context-summary">
+          <strong>{{ focusedStage.name }}</strong>
+          <span>{{ focusedStage.agents.length }} 个 Agent，下面直接编辑职责、Watch、Produce。</span>
+        </div>
+      </div>
+
+      <div v-if="focusedStage?.agents.length" class="toolbar-group agent-dsl-editor">
+        <div class="section-heading tight">
+          <p>Watch / Produce</p>
+          <span>这些字段会进入 organization.agents。</span>
+        </div>
+        <article
+          v-for="agent in focusedStage.agents"
+          :key="agent.id"
+          :class="['action-card', 'selectable-editor-card', { active: focusedAgentId === agent.id }]"
+          role="button"
+          tabindex="0"
+          @click="$emit('focus-agent', focusedStage, agent)"
+          @keyup.enter="$emit('focus-agent', focusedStage, agent)"
+        >
+          <strong>{{ agent.agentName }}</strong>
+          <label>
+            <span>Watch</span>
+            <input
+              :value="csvValue(agent.watch)"
+              type="text"
+              @input="$emit('set-csv-list', agent, 'watch', $event.target.value)"
+            />
+          </label>
+          <label>
+            <span>Produce</span>
+            <input
+              :value="csvValue(agent.produce)"
+              type="text"
+              @input="$emit('set-csv-list', agent, 'produce', $event.target.value)"
+            />
+          </label>
+          <label>
+            <span>职责</span>
+            <textarea v-model="agent.responsibility" rows="3"></textarea>
+          </label>
+        </article>
+      </div>
+    </template>
+  </div>
+</template>
