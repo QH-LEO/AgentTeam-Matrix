@@ -40,11 +40,25 @@ export const DEFAULT_QUALITY_GATES = [
     description: "开始写入项目文件前需要确认改动边界。",
   },
   {
+    id: "completion-review",
+    name: "完成验收",
+    type: "human",
+    required: true,
+    description: "完成后必须回顾交付产物、验证结果和剩余风险。",
+  },
+  {
     id: "destructive-command",
     name: "破坏性命令",
     type: "human",
     required: true,
     description: "删除、重置、迁移等不可逆操作必须人工确认。",
+  },
+  {
+    id: "deployment",
+    name: "发布前确认",
+    type: "human",
+    required: true,
+    description: "上线前必须人工确认发布范围、验证方式和回滚方案。",
   },
 ];
 
@@ -105,6 +119,8 @@ export function normalizePipeline(value) {
   const rawSopStages = Array.isArray(value.sop?.stages) ? value.sop.stages : [];
   const stages = rawStages.map((stage, index) => normalizeStage(stage, index, rawStages, rawSopStages));
   const leaderAgentName = String(value.leaderAgentName || value.organization?.leader?.agentName || toLeaderAgentName(value.name));
+  const delegationPolicy = normalizeDelegationPolicy(value.delegationPolicy);
+  const qualityGates = normalizeQualityGates(value.qualityGates, delegationPolicy.requireHumanApprovalFor);
   const pipeline = {
     id: String(value.id || slugify(value.name, "pipeline")),
     name: String(value.name),
@@ -112,8 +128,8 @@ export function normalizePipeline(value) {
     projectPath: String(value.projectPath || DEFAULT_PROJECT_PATH),
     claudeDir: String(value.claudeDir || DEFAULT_CLAUDE_DIR),
     sharedAgentsDir: String(value.sharedAgentsDir || defaultSharedAgentsDir(value.claudeDir || DEFAULT_CLAUDE_DIR)),
-    delegationPolicy: normalizeDelegationPolicy(value.delegationPolicy),
-    qualityGates: normalizeQualityGates(value.qualityGates),
+    delegationPolicy,
+    qualityGates,
     stages,
   };
 
@@ -288,7 +304,7 @@ function normalizeSop(sop = {}, pipeline) {
   };
 }
 
-function normalizeQualityGates(gates) {
+function normalizeQualityGates(gates, requiredGateIds = []) {
   const normalized = Array.isArray(gates) && gates.length
     ? gates.map((gate) => ({
         id: String(gate.id || slugify(gate.name, "gate")),
@@ -298,6 +314,11 @@ function normalizeQualityGates(gates) {
         description: String(gate.description || ""),
       }))
     : clone(DEFAULT_QUALITY_GATES);
+
+  for (const gateId of requiredGateIds) {
+    if (normalized.some((gate) => gate.id === gateId)) continue;
+    normalized.push(defaultQualityGate(gateId));
+  }
 
   const seen = new Set();
   return normalized.filter((gate) => {
@@ -316,6 +337,18 @@ function normalizeStringList(value, fallback = []) {
     return value.split(",").map((item) => item.trim()).filter(Boolean);
   }
   return [...fallback];
+}
+
+function defaultQualityGate(gateId) {
+  const existing = DEFAULT_QUALITY_GATES.find((gate) => gate.id === gateId);
+  if (existing) return clone(existing);
+  return {
+    id: String(gateId || "gate"),
+    name: String(gateId || "未命名门禁"),
+    type: "human",
+    required: true,
+    description: "该门禁来自 delegationPolicy，请补充更具体的审批说明。",
+  };
 }
 
 function skillNameFromPath(value) {
@@ -346,6 +379,7 @@ function inferGates(stageName) {
   if (/技术|方案|架构|architect|design/i.test(stageName)) return ["architecture-review"];
   if (/开发|实现|工程|code|developer/i.test(stageName)) return ["write-files"];
   if (/测试|验收|qa|test/i.test(stageName)) return ["completion-review"];
+  if (/发布|上线|deployment|release/i.test(stageName)) return ["deployment"];
   return [];
 }
 

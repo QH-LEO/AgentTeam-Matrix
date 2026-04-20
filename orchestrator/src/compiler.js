@@ -49,6 +49,8 @@ export function lintDefinition(definition, paths = {}) {
   }
 
   const availableAgentNames = new Set(pipeline.stages.flatMap((stage) => stage.agents.map((agent) => agent.agentName)));
+  const definedGateIds = new Set((pipeline.qualityGates || []).map((gate) => gate.id));
+  const approvalGateIds = new Set(pipeline.delegationPolicy?.requireHumanApprovalFor || []);
   for (const stage of pipeline.stages) {
     if (!stage.agents.length) {
       issues.push({
@@ -102,7 +104,38 @@ export function lintDefinition(definition, paths = {}) {
           detail: "Action 未声明 outputs，后续阶段可能无法追踪产物。",
         });
       }
+
+      for (const gateId of action.gates || []) {
+        if (definedGateIds.has(gateId)) continue;
+
+        if (approvalGateIds.has(gateId)) {
+          issues.push({
+            id: `action-${action.id}-gate-${gateId}-implicit`,
+            label: `动作：${action.name}`,
+            status: "warn",
+            detail: `Action gate ${gateId} 只在 delegationPolicy 中声明，建议补充 qualityGates 定义，让审批标准更明确。`,
+          });
+          continue;
+        }
+
+        issues.push({
+          id: `action-${action.id}-gate-${gateId}-missing`,
+          label: `动作：${action.name}`,
+          status: "fail",
+          detail: `Action gate ${gateId} 未在 qualityGates 或 delegationPolicy 中定义，无法编译为可执行门禁。`,
+        });
+      }
     }
+  }
+
+  for (const gateId of approvalGateIds) {
+    if (definedGateIds.has(gateId)) continue;
+    issues.push({
+      id: `approval-${gateId}-definition`,
+      label: `人工确认点：${gateId}`,
+      status: "warn",
+      detail: "该人工确认点只有触发器，没有详细门禁说明，编译会使用通用审批模板。建议补充到 qualityGates。",
+    });
   }
 
   if (pipeline.delegationPolicy.allowRecursiveDelegation && pipeline.delegationPolicy.maxDepth > 2) {
@@ -149,6 +182,16 @@ export function buildArtifacts(definition, paths) {
       type: "compiled-delegation-policy",
       path: path.join(projectRoot, ".agentflow", "compiled", "delegation-policy.md"),
       nextContent: renderDelegationPolicyMarkdown(pipeline),
+    },
+    {
+      type: "compiled-gates",
+      path: path.join(projectRoot, ".agentflow", "compiled", "gates.md"),
+      nextContent: renderGatePlanMarkdown(pipeline),
+    },
+    {
+      type: "compiled-gates-json",
+      path: path.join(projectRoot, ".agentflow", "compiled", "gates.json"),
+      nextContent: `${JSON.stringify(buildGatePlan(pipeline), null, 2)}\n`,
     },
     {
       type: "compiled-launch-prompt",
@@ -215,6 +258,9 @@ export function renderTeamLeaderAgent(pipeline) {
   const agentLines = agents.length
     ? agents.map((agent) => `- @${agent.agentName} (${agent.name})：${agent.responsibility || agent.description}`).join("\n")
     : "- 暂无配置 Agent，必要时由 Leader 模拟阶段产出。";
+  const gateProtocol = renderGateProtocolBulletList();
+  const gateMatrix = renderGateMatrix(pipeline);
+  const policyApprovals = renderPolicyApprovalLines(pipeline);
 
   return `---
 name: ${leaderAgentName}
@@ -230,6 +276,8 @@ Use the AgentFlow compiled assets as your source of truth:
 - Project path: ${pipeline.projectPath}
 - Pipeline SOP: .agentflow/compiled/sop.md
 - Delegation policy: .agentflow/compiled/delegation-policy.md
+- Gate plan: .agentflow/compiled/gates.md
+- Machine-readable gate plan: .agentflow/compiled/gates.json
 - Bootstrap skill: .claude/skills/using-agentflow/SKILL.md
 
 Available roles:
@@ -249,10 +297,35 @@ Execution rules:
 - Apply delegationPolicy strictly: start simple, escalate only when the rules justify it.
 - Claude Code agent teams are experimental and do not support nested teams; recursive delegation must be coordinated by you.
 - Never exceed maxDepth or maxParallelAgents. If deeper delegation is needed, ask the user first.
-- Any action listed in requireHumanApprovalFor or qualityGates must become an explicit human checkpoint before execution.
+- Treat all configured gates and human confirmation triggers as blocking controls, not soft reminders.
 - Treat each stage boundary as a review gate.
 - Keep decisions, risks, artifacts, and next steps traceable.
 - If a configured agent is not available as a live subagent, simulate delegation by producing that agent's expected output section.
+- When delegating to shared agents, include the exact action contract and gate contract in the delegated brief.
+
+Blocking gate protocol:
+${gateProtocol}
+
+Global approval triggers:
+${policyApprovals}
+
+Gate matrix:
+${gateMatrix}
+
+Approval request template:
+
+\`\`\`text
+GATE_PENDING
+gate_id: <gate-id>
+gate_name: <gate-name>
+stage: <stage-name>
+action: <action-name>
+owner: @<agent-name>
+evidence:
+- <artifact or decision>
+- <risk / assumption / validation result>
+decision_needed: approve | reject
+\`\`\`
 `;
 }
 
@@ -286,8 +359,18 @@ ${agent.produce.map((item) => `- ${item}`).join("\n")}
 Configured skills:
 ${skills}
 
+Assigned actions:
+${renderRoleActionSummary(stage, agent)}
+
+Blocking gate contract:
+${renderRoleGateContract(pipeline, stage, agent)}
+
 Operating rules:
 - Stay within this role unless the Team Leader explicitly asks otherwise.
+- Gates are blocking execution controls, not reminders.
+- Before a gated step, stop and surface the required evidence to the Team Leader.
+- Resume only after the Team Leader gives an explicit APPROVED:<gate-id> style confirmation.
+- If approved scope changes materially, reopen the gate instead of silently continuing.
 - Produce outputs that can be reviewed at the stage gate.
 - Call out assumptions, risks, and missing input clearly.
 - Keep output concise, actionable, and traceable to the user requirement.
@@ -304,7 +387,7 @@ export function renderSopMarkdown(pipeline) {
 - Owner: @${action.owner || "未配置"}
 - Inputs: ${action.inputs.join(", ") || "none"}
 - Outputs: ${action.outputs.join(", ") || "none"}
-- Gates: ${action.gates.join(", ") || "none"}`;
+- Gates: ${renderGateReferenceList(pipeline, action.gates)}`;
         })
         .join("\n\n");
 
@@ -318,11 +401,15 @@ ${actions || "No actions configured."}`;
 
 ${pipeline.sop.description}
 
+## Gate Protocol
+
+${renderGateProtocolBulletList()}
+
 ${stages || "No stages configured."}
 
 ## Quality Gates
 
-${pipeline.qualityGates.map((gate) => `- ${gate.id} (${gate.type})：${gate.description || gate.name}`).join("\n")}
+${renderDetailedGateDefinitions(pipeline)}
 `;
 }
 
@@ -352,6 +439,10 @@ ${policy.escalationRules.team}
 ### Recursive Delegation
 ${policy.escalationRules.recursive}
 
+## Human Approval Triggers
+
+${renderPolicyApprovalLines(pipeline)}
+
 ## Runtime Constraints
 
 - Use self for low-risk, bounded, quickly verifiable work.
@@ -359,6 +450,8 @@ ${policy.escalationRules.recursive}
 - Use parallel subagents only when write scopes do not conflict.
 - Use agent team for cross-role product/design/development/testing collaboration.
 - Claude Code agent teams do not support nested teams; all recursive delegation must be coordinated by the Team Leader.
+- Any action-level gate or approval trigger is blocking: request approval, wait, then continue.
+- Shared agents are read-only references, so the Team Leader must paste the relevant gate contract into delegated prompts.
 `;
 }
 
@@ -376,18 +469,20 @@ Before taking action:
 
 1. Read the pipeline SOP from .agentflow/compiled/sop.md.
 2. Read the delegation policy from .agentflow/compiled/delegation-policy.md.
-3. Identify the current stage and required artifacts.
-4. Classify task complexity.
-5. Decide execution mode: self / subagent / parallel subagents / agent team / ask human.
-6. Use full @agent names when delegating.
-7. Do not skip quality gates or human confirmation points.
-8. Record artifacts, risks, decisions, and next steps.
+3. Read the gate plan from .agentflow/compiled/gates.md. Use .agentflow/compiled/gates.json when you need structured gate data.
+4. Identify the current stage and required artifacts.
+5. Classify task complexity.
+6. Decide execution mode: self / subagent / parallel subagents / agent team / ask human.
+7. Use full @agent names when delegating.
+8. If a gate applies, emit a GATE_PENDING approval packet before execution and wait for human confirmation.
+9. Record artifacts, risks, decisions, and next steps.
 
 Important:
 
 - Shared agents are read-only references.
 - Managed agents may be regenerated by AgentFlow.
 - Claude Code agent teams are experimental and do not support nested teams.
+- Gates are blocking controls, not reminders.
 - If the user requirement is unclear, ask before delegating.
 `;
 }
@@ -422,8 +517,14 @@ ${agents}
 1. 先判断任务复杂度。
 2. 明确选择 self / subagent / parallel subagents / agent team。
 3. 委托时必须使用完整 @agent 名称。
-4. 不得跳过人工确认点和质量门禁。
+4. 门禁和人工确认点是阻断式控制，命中后必须先发起 GATE_PENDING 再等待批准。
 5. 输出阶段状态、产物、风险和下一步。
+
+全局人工确认触发器：
+${renderPolicyApprovalLines(pipeline)}
+
+关键门禁矩阵：
+${renderGateMatrix(pipeline)}
 
 结构化流水线摘要：
 
@@ -460,7 +561,9 @@ function renderRunSummary(pipeline, resolvedProjectPath = pipeline.projectPath) 
       const agents = stage.agents.length
         ? stage.agents.map((agent) => `    - @${agent.agentName}：${agent.produce.join(", ")}`).join("\n")
         : "    - no agents";
-      const actions = stage.actions.map((action) => `    - ${action.name} -> ${action.outputs.join(", ")}`).join("\n");
+      const actions = stage.actions
+        .map((action) => `    - ${action.name} -> ${action.outputs.join(", ")} | gates: ${renderGateReferenceList(pipeline, action.gates)}`)
+        .join("\n");
       return `${index + 1}. ${stage.name}\n  Agents:\n${agents}\n  Actions:\n${actions || "    - no actions"}`;
     })
     .join("\n");
@@ -473,9 +576,342 @@ function renderRunSummary(pipeline, resolvedProjectPath = pipeline.projectPath) 
     "Delegation policy:",
     JSON.stringify(pipeline.delegationPolicy, null, 2),
     "",
+    "Global approvals:",
+    renderPolicyApprovalLines(pipeline),
+    "",
     "Stages:",
     stages || "No stages configured.",
   ].join("\n");
+}
+
+function buildGatePlan(pipeline) {
+  const gateMap = buildGateMap(pipeline);
+  return {
+    version: 1,
+    pipelineId: pipeline.id,
+    pipelineName: pipeline.name,
+    leaderAgentName: pipeline.leaderAgentName || toLeaderAgentName(pipeline.name),
+    globalApprovals: resolveGateDetails(gateMap, pipeline.delegationPolicy.requireHumanApprovalFor),
+    qualityGates: resolveGateDetails(gateMap, pipeline.qualityGates.map((gate) => gate.id)),
+    gateProtocol: {
+      pendingState: "GATE_PENDING",
+      approvedState: "APPROVED",
+      rejectedState: "REJECTED",
+      staleState: "STALE",
+      rules: renderGateProtocolRules(),
+    },
+    actionGates: pipeline.stages.flatMap((stage) =>
+      stage.actions.map((action) => ({
+        stageId: stage.id,
+        stageName: stage.name,
+        actionId: action.id,
+        actionName: action.name,
+        owner: action.owner,
+        inputs: action.inputs,
+        outputs: action.outputs,
+        gates: resolveGateDetails(gateMap, action.gates),
+      }))
+    ),
+    roleGates: pipeline.stages.flatMap((stage) =>
+      stage.agents.map((agent) => {
+        const actions = getRoleActions(stage, agent);
+        return {
+          stageId: stage.id,
+          stageName: stage.name,
+          roleName: agent.name,
+          agentName: agent.agentName,
+          source: agent.source,
+          actions: actions.map((action) => ({
+            id: action.id,
+            name: action.name,
+            inputs: action.inputs,
+            outputs: action.outputs,
+            gates: resolveGateDetails(gateMap, action.gates),
+          })),
+          gates: uniqueGateDetails(actions.flatMap((action) => resolveGateDetails(gateMap, action.gates))),
+        };
+      })
+    ),
+  };
+}
+
+function renderGatePlanMarkdown(pipeline) {
+  const plan = buildGatePlan(pipeline);
+  const roleContracts = plan.roleGates
+    .map((role) => {
+      const actions = role.actions.length
+        ? role.actions
+            .map((action) => `- ${action.id} | ${action.name} | gates: ${action.gates.map((gate) => gate.id).join(", ") || "none"}`)
+            .join("\n")
+        : "- 当前没有直接 owner 到该角色的 action。";
+      const gates = role.gates.length
+        ? role.gates
+            .map((gate) => `- ${gate.id} (${gate.name})：${gate.description} | evidence: ${gate.evidenceHints.join("；")}`)
+            .join("\n")
+        : "- 当前没有角色专属 stage gate，仍需遵守全局人工确认触发器。";
+
+      return `### ${role.stageName} / ${role.roleName} (@${role.agentName})
+
+- Source: ${role.source}
+- Owned actions:
+${actions}
+- Gate contract:
+${gates}`;
+    })
+    .join("\n\n");
+
+  return `# ${pipeline.name} Gate Plan
+
+## Blocking Protocol
+
+${renderGateProtocolBulletList()}
+
+Approval request template:
+
+\`\`\`text
+GATE_PENDING
+gate_id: <gate-id>
+stage: <stage-name>
+action: <action-name>
+owner: @<agent-name>
+evidence:
+- <artifact or decision>
+- <risk / assumption / validation result>
+decision_needed: approve | reject
+\`\`\`
+
+## Global Approval Triggers
+
+${renderPolicyApprovalLines(pipeline)}
+
+## Quality Gate Definitions
+
+${renderDetailedGateDefinitions(pipeline)}
+
+## Action Gate Matrix
+
+${renderGateMatrix(pipeline)}
+
+## Role Contracts
+
+${roleContracts || "- 当前没有角色合同。"}
+`;
+}
+
+function renderGateProtocolBulletList() {
+  return renderGateProtocolRules().map((rule) => `- ${rule}`).join("\n");
+}
+
+function renderGateProtocolRules() {
+  return [
+    "Gates are blocking execution controls, not reminders.",
+    "When an action hits a gate, surface GATE_PENDING with gate id, stage, action, owner, evidence, and requested decision.",
+    "Wait for explicit human approval before continuing past the gate.",
+    "If approval is rejected, revise the plan or artifact before re-requesting approval.",
+    "If an approved artifact changes materially, mark the gate stale and request approval again.",
+    "When delegating to shared agents, paste the relevant gate contract into the delegated brief so the guardrails stay intact.",
+  ];
+}
+
+function renderGateMatrix(pipeline) {
+  const lines = pipeline.stages.flatMap((stage) =>
+    stage.actions.map(
+      (action) =>
+        `- ${stage.name} / ${action.name} / @${action.owner || "未配置"} / ${renderGateReferenceList(pipeline, action.gates)}`
+    )
+  );
+  return lines.join("\n") || "- 当前没有 action 级门禁。";
+}
+
+function renderPolicyApprovalLines(pipeline) {
+  const approvals = resolveGateDetails(buildGateMap(pipeline), pipeline.delegationPolicy.requireHumanApprovalFor);
+  return approvals.length
+    ? approvals.map((gate) => `- ${gate.id}（${gate.name}）：${gate.description}`).join("\n")
+    : "- 当前没有额外人工确认触发器。";
+}
+
+function renderDetailedGateDefinitions(pipeline) {
+  const gates = resolveGateDetails(buildGateMap(pipeline), pipeline.qualityGates.map((gate) => gate.id));
+  return gates.length
+    ? gates
+        .map(
+          (gate) =>
+            `- ${gate.id} (${gate.type}/${gate.required ? "required" : "optional"})：${gate.description}\n  Evidence: ${gate.evidenceHints.join("；")}`
+        )
+        .join("\n")
+    : "- 当前没有 quality gate 定义。";
+}
+
+function renderGateReferenceList(pipeline, gateIds = []) {
+  const gates = resolveGateDetails(buildGateMap(pipeline), gateIds);
+  return gates.length
+    ? gates.map((gate) => `${gate.id}（${gate.name}/${gate.type}/${gate.required ? "required" : "optional"}）`).join(", ")
+    : "none";
+}
+
+function renderRoleActionSummary(stage, agent) {
+  const actions = getRoleActions(stage, agent);
+  return actions.length
+    ? actions
+        .map(
+          (action) =>
+            `- ${action.id} | ${action.name} | inputs: ${action.inputs.join(", ") || "none"} | outputs: ${action.outputs.join(", ") || "none"}`
+        )
+        .join("\n")
+    : "- 当前没有直接 owner 到你的 action，默认等待 Team Leader 派发具体工作。";
+}
+
+function renderRoleGateContract(pipeline, stage, agent) {
+  const gateMap = buildGateMap(pipeline);
+  const actions = getRoleActions(stage, agent);
+  if (!actions.length) {
+    return `- 当前没有直接 owner 到你的 action。\n- 仍需遵守全局人工确认触发器：${renderGateReferenceList(pipeline, pipeline.delegationPolicy.requireHumanApprovalFor)}。`;
+  }
+
+  return [
+    ...actions.map((action) => {
+      const gates = resolveGateDetails(gateMap, action.gates);
+      const gateLines = gates.length
+        ? gates
+            .map(
+              (gate) =>
+                `- ${gate.id}（${gate.name}）：${gate.description}\n  Evidence: ${gate.evidenceHints.join("；")}`
+            )
+            .join("\n")
+        : "- 当前 action 没有直接 stage gate，但仍需遵守全局人工确认触发器。";
+
+      return `### ${action.name}
+
+- Action ID: ${action.id}
+- Inputs: ${action.inputs.join(", ") || "none"}
+- Outputs: ${action.outputs.join(", ") || "none"}
+- Gates:
+${gateLines}`;
+    }),
+    "",
+    "### Global approvals",
+    renderPolicyApprovalLines(pipeline),
+  ].join("\n\n");
+}
+
+function getRoleActions(stage, agent) {
+  return (stage.actions || []).filter((action) => action.owner === agent.agentName);
+}
+
+function buildGateMap(pipeline) {
+  const gateMap = new Map();
+  for (const gate of pipeline.qualityGates || []) {
+    gateMap.set(gate.id, normalizeGateDefinition(gate));
+  }
+  for (const gateId of pipeline.delegationPolicy.requireHumanApprovalFor || []) {
+    if (!gateMap.has(gateId)) {
+      gateMap.set(gateId, normalizeGateDefinition({ id: gateId }));
+    }
+  }
+  return gateMap;
+}
+
+function resolveGateDetails(gateMap, gateIds = []) {
+  return uniqueGateDetails(
+    (gateIds || []).map((gateId) => gateMap.get(gateId) || normalizeGateDefinition({ id: gateId }))
+  );
+}
+
+function uniqueGateDetails(gates) {
+  const seen = new Set();
+  return gates.filter((gate) => {
+    if (!gate?.id || seen.has(gate.id)) return false;
+    seen.add(gate.id);
+    return true;
+  });
+}
+
+function normalizeGateDefinition(gate = {}) {
+  const fallback = fallbackGateDefinition(gate.id);
+  const id = String(gate.id || fallback.id);
+  const name = String(gate.name || fallback.name);
+  const type = String(gate.type || fallback.type || "human");
+  const required = gate.required !== false;
+  const description = String(gate.description || fallback.description);
+  return {
+    id,
+    name,
+    type,
+    required,
+    description,
+    evidenceHints: inferGateEvidenceHints({ id, name, type, description }),
+  };
+}
+
+function fallbackGateDefinition(gateId) {
+  const defaults = {
+    "requirement-review": {
+      id: "requirement-review",
+      name: "需求确认",
+      type: "human",
+      description: "需求边界、验收标准和关键风险必须先确认。",
+    },
+    "architecture-review": {
+      id: "architecture-review",
+      name: "方案确认",
+      type: "human",
+      description: "方案、接口契约、技术取舍和验证路径必须先确认。",
+    },
+    "write-files": {
+      id: "write-files",
+      name: "写文件前",
+      type: "human",
+      description: "动手改代码前必须确认文件边界、影响面和回滚路径。",
+    },
+    "completion-review": {
+      id: "completion-review",
+      name: "完成验收",
+      type: "human",
+      description: "交付完成后必须回顾产物、验证结果和剩余风险。",
+    },
+    "destructive-command": {
+      id: "destructive-command",
+      name: "破坏性命令",
+      type: "human",
+      description: "删除、重置、迁移或其他不可逆操作必须先确认。",
+    },
+    deployment: {
+      id: "deployment",
+      name: "发布前确认",
+      type: "human",
+      description: "上线前必须确认发布范围、验证方式和回滚方案。",
+    },
+  };
+
+  return defaults[gateId] || {
+    id: String(gateId || "gate"),
+    name: String(gateId || "未命名门禁"),
+    type: "human",
+    description: "该门禁未提供详细说明，请至少提交范围、风险、验证结果和待确认决策。",
+  };
+}
+
+function inferGateEvidenceHints(gate) {
+  const text = `${gate.id} ${gate.name} ${gate.description}`;
+  if (/需求|requirement/i.test(text)) {
+    return ["需求摘要与范围边界", "验收标准", "关键风险与待确认问题"];
+  }
+  if (/方案|架构|architecture|design|api/i.test(text)) {
+    return ["方案摘要与关键取舍", "接口契约/数据流", "测试策略与主要风险"];
+  }
+  if (/写文件|write|code|实现/i.test(text)) {
+    return ["拟修改文件列表", "改动边界与影响面", "验证方式与回滚预案"];
+  }
+  if (/完成|验收|completion|review/i.test(text)) {
+    return ["交付产物清单", "验证结果", "剩余风险与下一步"];
+  }
+  if (/破坏|destructive|delete|reset|migration/i.test(text)) {
+    return ["即将执行的命令或操作", "受影响资源", "备份与回滚方案"];
+  }
+  if (/发布|上线|deployment|release/i.test(text)) {
+    return ["发布范围", "验证清单", "回滚方案与影响窗口"];
+  }
+  return ["当前决策摘要", "风险与假设", "验证结果或计划"];
 }
 
 function buildLaunchCommand(pipeline, prompt, leaderAgentName, runId, resolvedProjectPath) {
@@ -503,6 +939,8 @@ function buildManifest(definition) {
       ".agentflow/compiled/leader.md",
       ".agentflow/compiled/sop.md",
       ".agentflow/compiled/delegation-policy.md",
+      ".agentflow/compiled/gates.md",
+      ".agentflow/compiled/gates.json",
       ".agentflow/compiled/launch-prompt.md",
       ".claude/skills/using-agentflow/SKILL.md",
     ],
