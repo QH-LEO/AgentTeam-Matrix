@@ -7,7 +7,7 @@ defineProps({
   focusedAgent: { type: Object, default: null },
 });
 
-defineEmits(["add-skill", "focus-stage", "focus-agent"]);
+defineEmits(["add-skill", "focus-stage", "focus-agent", "delete-skill", "set-skill-field"]);
 </script>
 
 <template>
@@ -63,8 +63,36 @@ defineEmits(["add-skill", "focus-stage", "focus-agent"]);
           <span>{{ focusedAgent.responsibility || "暂未填写职责" }}</span>
           <div class="skill-directory-list">
             <article v-for="skill in focusedAgent.skills" :key="skill.id" class="skill-directory-card active">
-              <strong>{{ skill.name }} <small>v{{ skill.version }}</small></strong>
-              <span>{{ skill.path || "未配置目录" }}</span>
+              <div class="card-header-actions">
+                <strong>{{ skill.name }} <small>v{{ skill.version }}</small></strong>
+                <button class="ghost-button compact danger-button" type="button" @click="$emit('delete-skill', skill)">
+                  删除
+                </button>
+              </div>
+              <label>
+                <span>Skill 名称</span>
+                <input
+                  :value="skill.name"
+                  type="text"
+                  @input="$emit('set-skill-field', skill, 'name', $event.target.value)"
+                />
+              </label>
+              <label>
+                <span>版本</span>
+                <input
+                  :value="skill.version"
+                  type="text"
+                  @input="$emit('set-skill-field', skill, 'version', $event.target.value)"
+                />
+              </label>
+              <label>
+                <span>目录</span>
+                <input
+                  :value="skill.path"
+                  type="text"
+                  @input="$emit('set-skill-field', skill, 'path', $event.target.value)"
+                />
+              </label>
             </article>
             <div v-if="!focusedAgent.skills.length" class="mini-empty">这个 Agent 还没有 Skill。</div>
           </div>

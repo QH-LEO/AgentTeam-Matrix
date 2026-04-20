@@ -4,7 +4,7 @@ defineProps({
   approvalOptions: { type: Array, required: true },
 });
 
-defineEmits(["set-policy-value", "toggle-policy-flag", "toggle-approval", "add-quality-gate"]);
+defineEmits(["set-policy-value", "toggle-policy-flag", "toggle-approval", "add-quality-gate", "delete-quality-gate"]);
 </script>
 
 <template>
@@ -155,6 +155,9 @@ defineEmits(["set-policy-value", "toggle-policy-flag", "toggle-approval", "add-q
                 <input v-model="gate.required" type="checkbox" />
                 <span>必需</span>
               </label>
+              <button class="ghost-button compact danger-button" type="button" @click="$emit('delete-quality-gate', gate)">
+                删除
+              </button>
             </div>
             <textarea v-model="gate.description" rows="2" placeholder="门禁说明"></textarea>
           </article>

@@ -9,7 +9,7 @@ defineProps({
   csvValue: { type: Function, required: true },
 });
 
-defineEmits(["add-agent", "focus-stage", "focus-agent", "set-agent-field", "set-csv-list"]);
+defineEmits(["add-agent", "focus-stage", "focus-agent", "set-agent-field", "delete-agent", "set-csv-list"]);
 </script>
 
 <template>
@@ -79,7 +79,16 @@ defineEmits(["add-agent", "focus-stage", "focus-agent", "set-agent-field", "set-
               <strong>{{ agent.name }}</strong>
               <span>@{{ agent.agentName }}</span>
             </div>
-            <span>{{ agent.source === "shared" ? "Shared" : "Managed" }}</span>
+            <div class="card-header-actions">
+              <span>{{ agent.source === "shared" ? "Shared" : "Managed" }}</span>
+              <button
+                class="ghost-button compact danger-button"
+                type="button"
+                @click.stop="$emit('delete-agent', focusedStage, agent)"
+              >
+                删除
+              </button>
+            </div>
           </div>
           <label>
             <span>角色名称</span>

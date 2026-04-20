@@ -11,13 +11,16 @@ defineProps({
 
 defineEmits([
   "create-pipeline",
+  "delete-pipeline",
   "select-pipeline",
   "set-pipeline-field",
   "add-stage",
   "focus-stage",
   "set-stage-field",
+  "delete-stage",
   "move-stage",
   "add-action",
+  "delete-action",
   "move-action",
   "set-csv-list",
 ]);
@@ -118,6 +121,11 @@ defineEmits([
           placeholder="共享 Agent 目录"
           @input="$emit('set-pipeline-field', 'sharedAgentsDir', $event.target.value)"
         />
+        <div class="run-action-row">
+          <button class="ghost-button danger-button" type="button" @click="$emit('delete-pipeline', selectedPipeline)">
+            删除当前流水线
+          </button>
+        </div>
       </div>
     </div>
 
@@ -204,6 +212,9 @@ defineEmits([
           >
             下移阶段
           </button>
+          <button class="ghost-button danger-button" type="button" @click="$emit('delete-stage', focusedStage)">
+            删除阶段
+          </button>
         </div>
       </div>
     </div>
@@ -232,6 +243,14 @@ defineEmits([
               @click="$emit('move-action', focusedStage, action, 1)"
             >
               ↓
+            </button>
+            <button
+              class="ghost-button compact order-action-button danger-button"
+              type="button"
+              :disabled="focusedStage.actions.length <= 1"
+              @click="$emit('delete-action', focusedStage, action)"
+            >
+              ×
             </button>
           </div>
         </div>

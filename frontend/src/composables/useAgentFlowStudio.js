@@ -360,6 +360,39 @@ export function useAgentFlowStudio() {
     lastAction.value = `已创建本地流水线：${pipeline.name}`;
   }
 
+  function deletePipeline(pipeline) {
+    if (!pipeline) return;
+    const index = state.pipelines.findIndex((item) => item.id === pipeline.id);
+    if (index < 0) return;
+    if (!confirmDelete(`删除流水线「${pipeline.name}」？此操作会同时移除它的阶段、Agent 和 Skill 引用。`)) return;
+
+    const deletingSelected = state.selectedPipelineId === pipeline.id;
+    state.pipelines.splice(index, 1);
+    clearCompileAndPreflightState();
+
+    if (!state.pipelines.length) {
+      state.selectedPipelineId = "";
+      syncFocusForPipeline(state, null);
+      state.forms.projectPath = DEFAULT_PROJECT_PATH;
+      state.forms.claudeDir = DEFAULT_CLAUDE_DIR;
+      state.forms.sharedAgentsDir = defaultSharedAgentsDir(DEFAULT_CLAUDE_DIR);
+      lastAction.value = `已删除流水线：${pipeline.name}`;
+      return;
+    }
+
+    if (deletingSelected) {
+      const nextPipeline = state.pipelines[index] || state.pipelines[index - 1] || state.pipelines[0] || null;
+      state.selectedPipelineId = nextPipeline?.id || "";
+      syncFocusForPipeline(state, nextPipeline);
+    } else {
+      const currentPipeline = state.pipelines.find((item) => item.id === state.selectedPipelineId) || state.pipelines[0] || null;
+      state.selectedPipelineId = currentPipeline?.id || "";
+      syncFocusForPipeline(state, currentPipeline);
+    }
+
+    lastAction.value = `已删除流水线：${pipeline.name}`;
+  }
+
   function addStage() {
     const pipeline = selectedPipeline.value;
     const name = state.forms.stageName.trim();
@@ -408,6 +441,38 @@ export function useAgentFlowStudio() {
     lastAction.value = `已添加阶段：${stage.name}`;
   }
 
+  function deleteStage(stage) {
+    const pipeline = selectedPipeline.value;
+    if (!pipeline || !stage) return;
+
+    const index = pipeline.stages.findIndex((item) => item.id === stage.id);
+    if (index < 0) return;
+    if (!confirmDelete(`删除阶段「${stage.name}」？该阶段下的 Agent、Action 和 Skill 会一起移除。`)) return;
+
+    const wasFocused = state.focusedStageId === stage.id;
+    pipeline.stages.splice(index, 1);
+    syncDerivedPipeline(pipeline);
+
+    if (!pipeline.stages.length) {
+      syncFocusForPipeline(state, pipeline);
+      lastAction.value = `已删除阶段：${stage.name}`;
+      return;
+    }
+
+    if (wasFocused) {
+      const nextStage = pipeline.stages[index] || pipeline.stages[index - 1] || pipeline.stages[0] || null;
+      if (nextStage) {
+        focusStage(nextStage);
+      } else {
+        syncFocusForPipeline(state, pipeline);
+      }
+    } else {
+      syncFocusForPipeline(state, pipeline);
+    }
+
+    lastAction.value = `已删除阶段：${stage.name}`;
+  }
+
   function addAgent() {
     const pipeline = selectedPipeline.value;
     if (!pipeline || !state.forms.agentStageId) return;
@@ -451,6 +516,38 @@ export function useAgentFlowStudio() {
     lastAction.value = sharedAgent ? `已引用共享 Agent：${agent.agentName}` : `已创建托管 Agent：${agent.agentName}`;
   }
 
+  function deleteAgent(stage, agent) {
+    const pipeline = selectedPipeline.value;
+    if (!pipeline || !stage || !agent) return;
+
+    const index = stage.agents.findIndex((item) => item.id === agent.id);
+    if (index < 0) return;
+    if (!confirmDelete(`删除 Agent「${agent.name}」？该角色绑定的 Skill 目录也会一起移除。`)) return;
+
+    stage.agents.splice(index, 1);
+    const fallbackOwner = stage.agents[0]?.agentName || "";
+    for (const action of stage.actions) {
+      if (action.owner === agent.agentName) {
+        action.owner = fallbackOwner;
+      }
+    }
+
+    syncDerivedPipeline(pipeline);
+
+    if (state.focusedAgentId === agent.id) {
+      const nextAgent = stage.agents[index] || stage.agents[index - 1] || null;
+      if (nextAgent) {
+        focusAgent(stage, nextAgent);
+      } else {
+        focusStage(stage);
+      }
+    } else {
+      syncFocusForPipeline(state, pipeline);
+    }
+
+    lastAction.value = `已删除 Agent：${agent.name}`;
+  }
+
   function addSkill() {
     const pipeline = selectedPipeline.value;
     if (!pipeline || !state.forms.skillStageId || !state.forms.skillAgentId) return;
@@ -473,6 +570,43 @@ export function useAgentFlowStudio() {
     lastAction.value = `已为 ${agent.name} 绑定 Skill 目录：${path}`;
   }
 
+  function deleteSkill(skill) {
+    const pipeline = selectedPipeline.value;
+    const agent = focusedAgent.value;
+    if (!pipeline || !agent || !skill) return;
+
+    const index = agent.skills.findIndex((item) => item.id === skill.id);
+    if (index < 0) return;
+    if (!confirmDelete(`移除 Skill「${skill.name}」？只会删除当前 Agent 的目录绑定，不会删除磁盘目录。`)) return;
+
+    agent.skills.splice(index, 1);
+    syncDerivedPipeline(pipeline);
+    lastAction.value = `已移除 Skill：${skill.name}`;
+  }
+
+  function setSkillField(skill, key, value) {
+    const pipeline = selectedPipeline.value;
+    const agent = focusedAgent.value;
+    if (!pipeline || !agent || !skill) return;
+
+    const nextValue = typeof value === "string" ? value.trim() : value;
+    if (key === "name") {
+      skill.name = nextValue || skillNameFromPath(skill.path) || "unnamed_skill";
+    } else if (key === "version") {
+      skill.version = nextValue || "latest";
+    } else if (key === "path") {
+      skill.path = nextValue || "";
+      if (!skill.name || skill.name === "unnamed_skill") {
+        skill.name = skillNameFromPath(skill.path) || "unnamed_skill";
+      }
+    } else {
+      skill[key] = nextValue;
+    }
+
+    syncDerivedPipeline(pipeline);
+    lastAction.value = `已更新 Skill：${skill.name}`;
+  }
+
   function addAction(stage) {
     const owner = stage.agents[0]?.agentName || "";
     stage.actions.push({
@@ -484,6 +618,24 @@ export function useAgentFlowStudio() {
       gates: [],
     });
     syncDerivedPipeline(selectedPipeline.value);
+  }
+
+  function deleteAction(stage, action) {
+    const pipeline = selectedPipeline.value;
+    if (!pipeline || !stage || !action) return;
+
+    if (stage.actions.length <= 1) {
+      lastAction.value = `阶段「${stage.name}」至少保留 1 个 Action`;
+      return;
+    }
+
+    const index = stage.actions.findIndex((item) => item.id === action.id);
+    if (index < 0) return;
+    if (!confirmDelete(`删除 Action「${action.name}」？`)) return;
+
+    stage.actions.splice(index, 1);
+    syncDerivedPipeline(pipeline);
+    lastAction.value = `已删除 Action：${action.name}`;
   }
 
   function setAgentField(stage, agent, key, value) {
@@ -589,6 +741,22 @@ export function useAgentFlowStudio() {
       description: "",
     });
     syncDerivedPipeline(selectedPipeline.value);
+  }
+
+  function deleteQualityGate(gate) {
+    const pipeline = selectedPipeline.value;
+    if (!pipeline || !gate) return;
+
+    const index = pipeline.qualityGates.findIndex((item) => item.id === gate.id);
+    if (index < 0) return;
+    if (!confirmDelete(`删除质量门禁「${gate.name || gate.id}」？如果还有 Action 引用它，编译会提示你修复。`)) return;
+
+    pipeline.qualityGates.splice(index, 1);
+    pipeline.delegationPolicy.requireHumanApprovalFor = pipeline.delegationPolicy.requireHumanApprovalFor.filter(
+      (item) => item !== gate.id
+    );
+    syncDerivedPipeline(pipeline);
+    lastAction.value = `已删除质量门禁：${gate.name || gate.id}`;
   }
 
   function focusStage(stage) {
@@ -865,6 +1033,14 @@ export function useAgentFlowStudio() {
     }
   }
 
+  function clearCompileAndPreflightState() {
+    compilePreview.value = null;
+    selectedArtifactIndex.value = 0;
+    preflightResult.value = null;
+    preflightError.value = "";
+    lintResult.value = null;
+  }
+
   onMounted(() => {
     loadDefinition();
     loadAvailableAgents();
@@ -913,18 +1089,25 @@ export function useAgentFlowStudio() {
     setMenu,
     selectPipeline,
     createPipeline,
+    deletePipeline,
     addStage,
     addStageAt,
+    deleteStage,
     setPipelineField,
     setStageField,
     setAgentField,
     moveStage,
     moveStageToIndex,
     addAgent,
+    deleteAgent,
     addSkill,
+    deleteSkill,
+    setSkillField,
     addAction,
+    deleteAction,
     moveAction,
     addQualityGate,
+    deleteQualityGate,
     focusStage,
     focusAgent,
     resetDemoData,
@@ -1201,6 +1384,11 @@ function moveItem(list, itemId, direction) {
   if (index < 0 || targetIndex < 0 || targetIndex >= list.length) return;
   const [item] = list.splice(index, 1);
   list.splice(targetIndex, 0, item);
+}
+
+function confirmDelete(message) {
+  if (typeof window === "undefined" || typeof window.confirm !== "function") return true;
+  return window.confirm(message);
 }
 
 function pipelineFieldLabel(key) {

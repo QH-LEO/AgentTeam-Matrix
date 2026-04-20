@@ -115,13 +115,16 @@ function updateLaunchMode(mode) {
               :last-action="studio.lastAction"
               :csv-value="studio.csvValue"
               @create-pipeline="studio.createPipeline"
+              @delete-pipeline="studio.deletePipeline"
               @select-pipeline="studio.selectPipeline"
               @set-pipeline-field="studio.setPipelineField"
               @add-stage="studio.addStage"
               @focus-stage="studio.focusStage"
               @set-stage-field="studio.setStageField"
+              @delete-stage="studio.deleteStage"
               @move-stage="studio.moveStage"
               @add-action="studio.addAction"
+              @delete-action="studio.deleteAction"
               @move-action="studio.moveAction"
               @set-csv-list="studio.setCsvList"
             />
@@ -134,6 +137,7 @@ function updateLaunchMode(mode) {
               @toggle-policy-flag="studio.togglePolicyFlag"
               @toggle-approval="studio.toggleApproval"
               @add-quality-gate="studio.addQualityGate"
+              @delete-quality-gate="studio.deleteQualityGate"
             />
 
             <AgentEditor
@@ -149,6 +153,7 @@ function updateLaunchMode(mode) {
               @focus-stage="studio.focusStage"
               @focus-agent="studio.focusAgent"
               @set-agent-field="studio.setAgentField"
+              @delete-agent="studio.deleteAgent"
               @set-csv-list="studio.setCsvList"
             />
 
@@ -162,6 +167,8 @@ function updateLaunchMode(mode) {
               @add-skill="studio.addSkill"
               @focus-stage="studio.focusStage"
               @focus-agent="studio.focusAgent"
+              @delete-skill="studio.deleteSkill"
+              @set-skill-field="studio.setSkillField"
             />
 
             <CompilerPreview

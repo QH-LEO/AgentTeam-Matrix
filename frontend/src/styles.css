@@ -251,6 +251,13 @@ button {
   gap: 12px;
 }
 
+.card-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
 .action-card label,
 .gate-card label {
   display: grid;
@@ -698,7 +705,9 @@ button {
 }
 
 .danger-button {
+  color: #fff;
   background: linear-gradient(135deg, #dc2626, #fb7185);
+  border-color: rgba(251, 113, 133, 0.28);
 }
 
 .run-error-banner {
@@ -1237,7 +1246,7 @@ button {
 
 .gate-card-header {
   display: grid;
-  grid-template-columns: minmax(140px, 0.9fr) minmax(160px, 1fr) minmax(120px, 0.7fr) auto;
+  grid-template-columns: minmax(140px, 0.9fr) minmax(160px, 1fr) minmax(120px, 0.7fr) auto auto;
   gap: 10px;
   align-items: end;
 }
@@ -1287,6 +1296,16 @@ button {
   color: #f8fbff;
 }
 
+.skill-directory-card label {
+  display: grid;
+  gap: 6px;
+}
+
+.skill-directory-card label span {
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
 .skill-directory-card small {
   color: var(--text-soft);
   font-weight: 500;
@@ -1296,6 +1315,15 @@ button {
   color: #d7d4ff;
   overflow-wrap: anywhere;
   font-size: 13px;
+}
+
+.skill-directory-card .card-header-actions {
+  width: 100%;
+  align-items: start;
+}
+
+.skill-directory-card .ghost-button {
+  flex: none;
 }
 
 .inline-form,
