@@ -40,15 +40,15 @@ Delegation policy:
 {
   "defaultMode": "self_first",
   "allowSubAgents": true,
-  "allowAgentTeam": true,
+  "allowAgentTeam": false,
   "allowRecursiveDelegation": true,
   "maxDepth": 2,
   "maxParallelAgents": 4,
   "requireHumanApprovalFor": [
-    "architecture-review",
-    "write-files",
     "destructive-command",
-    "deployment"
+    "deployment",
+    "requirement-review",
+    "architecture-review"
   ],
   "escalationRules": {
     "self": "任务小、路径清楚、上下文足够、单一产物时由当前 Agent 自己完成。",

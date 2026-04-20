@@ -244,6 +244,13 @@ button {
   color: #f8fbff;
 }
 
+.node-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .action-card label,
 .gate-card label {
   display: grid;
@@ -1378,6 +1385,18 @@ textarea:focus {
   min-width: 0;
 }
 
+.order-card-body {
+  min-width: 0;
+  flex: 1;
+  display: grid;
+  gap: 4px;
+}
+
+.order-card-body small {
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
 .order-card span {
   display: inline-grid;
   place-items: center;
@@ -1385,6 +1404,18 @@ textarea:focus {
   height: 30px;
   border-radius: 999px;
   background: rgba(148, 163, 184, 0.14);
+}
+
+.order-actions {
+  display: inline-flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.order-action-button {
+  min-width: 38px;
+  width: 38px;
+  padding: 0;
 }
 
 .canvas-shell {

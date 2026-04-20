@@ -6,9 +6,11 @@ import { spawn, spawnSync } from "node:child_process";
 import { buildCompilePlan, buildLaunchPrompt, lintDefinition } from "./compiler.js";
 import { normalizeDefinitionRequest, normalizeLaunchMode, normalizePipeline } from "./schema.js";
 import {
-  CLAUDE_AGENTS_DIR,
   canCreateDirectory,
   canWriteDirectory,
+  getClaudeAgentsDir,
+  getClaudeDir,
+  getSharedAgentsDir,
   getAgentPath,
   getPaths,
   listClaudeAgents,
@@ -40,12 +42,24 @@ app.get("/api/health", (req, res) => {
 });
 
 app.get("/api/agents", (req, res) => {
-  res.json({ agents: listClaudeAgents() });
+  res.json({
+    agents: listClaudeAgents({
+      claudeDir: req.query?.claudeDir,
+      sharedAgentsDir: req.query?.sharedAgentsDir,
+    }),
+  });
 });
 
 app.post("/api/lint", (req, res) => {
-  const definition = normalizeDefinitionRequest(req.body, readDefinition());
-  const result = lintDefinition(definition, getPaths());
+  const existingDefinition = readDefinition();
+  const definition = normalizeDefinitionRequest(req.body, existingDefinition);
+  const result = lintDefinition(
+    definition,
+    getPaths({
+      claudeDir: definition.pipeline?.claudeDir,
+      sharedAgentsDir: definition.pipeline?.sharedAgentsDir,
+    })
+  );
   res.json({
     ok: result.ok,
     issues: result.issues,
@@ -82,12 +96,20 @@ app.post("/api/definition/preview", (req, res) => {
     return;
   }
 
-  const definition = normalizeDefinitionRequest({ pipeline, pipelines: [pipeline], selectedPipelineId: pipeline.id }, readDefinition());
-  const plan = buildCompilePlan(definition, readDefinition(), getPaths());
+  const existingDefinition = readDefinition();
+  const definition = normalizeDefinitionRequest({ pipeline, pipelines: [pipeline], selectedPipelineId: pipeline.id }, existingDefinition);
+  const plan = buildCompilePlan(
+    definition,
+    existingDefinition,
+    getPaths({
+      claudeDir: pipeline.claudeDir,
+      sharedAgentsDir: pipeline.sharedAgentsDir,
+    })
+  );
   const artifact = withCurrentContent(plan.artifacts).find((item) => item.type === "leader-agent");
   res.json({
     leaderAgentName: pipeline.leaderAgentName,
-    leaderPath: artifact?.path || getAgentPath(pipeline.leaderAgentName),
+    leaderPath: artifact?.path || getAgentPath(pipeline.leaderAgentName, getClaudeAgentsDir(pipeline.claudeDir)),
     nextMarkdown: artifact?.nextContent || "",
     currentMarkdown: artifact?.currentContent || "",
     changed: artifact?.changed ?? false,
@@ -95,7 +117,16 @@ app.post("/api/definition/preview", (req, res) => {
 });
 
 app.post("/api/definition", (req, res) => {
-  const plan = buildCompilePlan(req.body, readDefinition(), getPaths());
+  const existingDefinition = readDefinition();
+  const definition = normalizeDefinitionRequest(req.body, existingDefinition);
+  const plan = buildCompilePlan(
+    definition,
+    existingDefinition,
+    getPaths({
+      claudeDir: definition.pipeline?.claudeDir,
+      sharedAgentsDir: definition.pipeline?.sharedAgentsDir,
+    })
+  );
   if (!plan.definition.pipeline) {
     res.status(400).json({ error: "pipeline is required" });
     return;
@@ -116,7 +147,16 @@ app.post("/api/definition", (req, res) => {
 });
 
 app.post("/api/compile/preview", (req, res) => {
-  const plan = buildCompilePlan(req.body, readDefinition(), getPaths());
+  const existingDefinition = readDefinition();
+  const definition = normalizeDefinitionRequest(req.body, existingDefinition);
+  const plan = buildCompilePlan(
+    definition,
+    existingDefinition,
+    getPaths({
+      claudeDir: definition.pipeline?.claudeDir,
+      sharedAgentsDir: definition.pipeline?.sharedAgentsDir,
+    })
+  );
   res.json({
     ...plan,
     artifacts: withCurrentContent(plan.artifacts),
@@ -124,7 +164,16 @@ app.post("/api/compile/preview", (req, res) => {
 });
 
 app.post("/api/compile/apply", (req, res) => {
-  const plan = buildCompilePlan(req.body, readDefinition(), getPaths());
+  const existingDefinition = readDefinition();
+  const definition = normalizeDefinitionRequest(req.body, existingDefinition);
+  const plan = buildCompilePlan(
+    definition,
+    existingDefinition,
+    getPaths({
+      claudeDir: definition.pipeline?.claudeDir,
+      sharedAgentsDir: definition.pipeline?.sharedAgentsDir,
+    })
+  );
   if (!plan.definition.pipeline) {
     res.status(400).json({ error: "pipeline is required" });
     return;
@@ -252,8 +301,11 @@ server.listen(PORT, () => {
 });
 
 function buildPreflightChecks(pipeline) {
+  const claudeDir = getClaudeDir(pipeline.claudeDir);
+  const claudeAgentsDir = getClaudeAgentsDir(claudeDir);
+  const sharedAgentsDir = getSharedAgentsDir(pipeline.sharedAgentsDir, claudeDir);
   const leaderAgentName = pipeline.leaderAgentName;
-  const leaderPath = getAgentPath(leaderAgentName);
+  const leaderPath = getAgentPath(leaderAgentName, claudeAgentsDir);
   const sharedAgents = pipeline.stages.flatMap((stage) =>
     stage.agents.filter((agent) => agent.source === "shared").map((agent) => agent.agentName)
   );
@@ -267,7 +319,7 @@ function buildPreflightChecks(pipeline) {
         }))
     )
   );
-  const missingSharedAgents = sharedAgents.filter((agentName) => !fs.existsSync(getAgentPath(agentName)));
+  const missingSharedAgents = sharedAgents.filter((agentName) => !fs.existsSync(getAgentPath(agentName, sharedAgentsDir)));
   const missingSkillRefs = skillRefs.filter((skill) => !pathExistsDirectory(skill.path));
   const claudeBinary = findExecutable("claude", [
     "/Users/leo/.local/bin/claude",
@@ -277,11 +329,24 @@ function buildPreflightChecks(pipeline) {
   ]);
   const iTermAvailable = checkITerm().ok;
   const projectPathExists = pathExistsDirectory(pipeline.projectPath);
-  const agentsDirExists = fs.existsSync(CLAUDE_AGENTS_DIR);
+  const agentsDirExists = fs.existsSync(claudeAgentsDir);
+  const sharedAgentsDirExists = pathExistsDirectory(sharedAgentsDir);
   const agentflowDir = path.join(pipeline.projectPath, ".agentflow");
   const projectClaudeSkillsDir = path.join(pipeline.projectPath, ".claude", "skills");
 
   return [
+    {
+      id: "claude-dir",
+      label: "Claude 目录",
+      status: pathExistsDirectory(claudeDir) ? "pass" : "warn",
+      detail: claudeDir,
+    },
+    {
+      id: "shared-agents-dir",
+      label: "共享 Agent 目录",
+      status: sharedAgentsDirExists ? "pass" : sharedAgents.length ? "fail" : "warn",
+      detail: sharedAgentsDirExists ? sharedAgentsDir : `目录不存在：${sharedAgentsDir}`,
+    },
     {
       id: "project-path",
       label: "项目地址",
@@ -323,8 +388,8 @@ function buildPreflightChecks(pipeline) {
     {
       id: "agents-dir",
       label: "Claude agents 目录",
-      status: agentsDirExists && canWriteDirectory(CLAUDE_AGENTS_DIR) ? "pass" : "fail",
-      detail: agentsDirExists ? CLAUDE_AGENTS_DIR : `目录不存在：${CLAUDE_AGENTS_DIR}`,
+      status: agentsDirExists && canWriteDirectory(claudeAgentsDir) ? "pass" : "fail",
+      detail: agentsDirExists ? claudeAgentsDir : `目录不存在：${claudeAgentsDir}`,
     },
     {
       id: "leader-agent",

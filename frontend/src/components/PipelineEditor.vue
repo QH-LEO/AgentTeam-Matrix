@@ -12,9 +12,13 @@ defineProps({
 defineEmits([
   "create-pipeline",
   "select-pipeline",
+  "set-pipeline-field",
   "add-stage",
   "focus-stage",
+  "set-stage-field",
+  "move-stage",
   "add-action",
+  "move-action",
   "set-csv-list",
 ]);
 </script>
@@ -45,6 +49,16 @@ defineEmits([
         type="text"
         placeholder="项目地址，例如：/Users/leo/Projects/agentflow-platform"
       />
+      <input
+        v-model="forms.claudeDir"
+        type="text"
+        placeholder="Claude 目录，例如：/Users/leo/.claude"
+      />
+      <input
+        v-model="forms.sharedAgentsDir"
+        type="text"
+        placeholder="共享 Agent 目录，例如：/Users/leo/.claude/agents"
+      />
     </div>
 
     <div class="toolbar-group pipeline-list-group">
@@ -63,7 +77,48 @@ defineEmits([
         <span>Stages: {{ pipeline.stages.length }} · Actions: {{ pipeline.sop?.stages?.reduce((total, stage) => total + stage.actions.length, 0) || 0 }}</span>
         <span>Leader: {{ pipeline.leaderAgentName }}</span>
         <span>{{ pipeline.projectPath }}</span>
+        <span>{{ pipeline.claudeDir }}</span>
+        <span>{{ pipeline.sharedAgentsDir }}</span>
       </button>
+    </div>
+
+    <div v-if="selectedPipeline" class="toolbar-group">
+      <div class="section-heading tight">
+        <p>当前流水线</p>
+        <span>编辑已存在的流水线配置，预检和编译都会使用这里的目录。</span>
+      </div>
+      <div class="stack-form">
+        <input
+          :value="selectedPipeline.name"
+          type="text"
+          placeholder="流水线名称"
+          @input="$emit('set-pipeline-field', 'name', $event.target.value)"
+        />
+        <input
+          :value="selectedPipeline.leaderAgentName"
+          type="text"
+          placeholder="Team Leader Agent 名称"
+          @input="$emit('set-pipeline-field', 'leaderAgentName', $event.target.value)"
+        />
+        <input
+          :value="selectedPipeline.projectPath"
+          type="text"
+          placeholder="项目地址"
+          @input="$emit('set-pipeline-field', 'projectPath', $event.target.value)"
+        />
+        <input
+          :value="selectedPipeline.claudeDir"
+          type="text"
+          placeholder="Claude 目录"
+          @input="$emit('set-pipeline-field', 'claudeDir', $event.target.value)"
+        />
+        <input
+          :value="selectedPipeline.sharedAgentsDir"
+          type="text"
+          placeholder="共享 Agent 目录"
+          @input="$emit('set-pipeline-field', 'sharedAgentsDir', $event.target.value)"
+        />
+      </div>
     </div>
 
     <div v-if="selectedPipeline" class="toolbar-group">
@@ -95,8 +150,62 @@ defineEmits([
         @click="$emit('focus-stage', stage)"
       >
         <span>{{ index + 1 }}</span>
-        <strong>{{ stage.name }}</strong>
+        <div class="order-card-body">
+          <strong>{{ stage.name }}</strong>
+          <small>{{ stage.actions.length }} Actions · {{ stage.agents.length }} Agents</small>
+        </div>
+        <div class="order-actions">
+          <button
+            class="ghost-button compact order-action-button"
+            type="button"
+            :disabled="index === 0"
+            @click.stop="$emit('move-stage', stage, -1)"
+          >
+            ↑
+          </button>
+          <button
+            class="ghost-button compact order-action-button"
+            type="button"
+            :disabled="index === selectedPipeline.stages.length - 1"
+            @click.stop="$emit('move-stage', stage, 1)"
+          >
+            ↓
+          </button>
+        </div>
       </button>
+    </div>
+
+    <div v-if="focusedStage" class="toolbar-group stage-editor">
+      <div class="section-heading tight">
+        <p>当前阶段</p>
+        <span>可直接修改阶段名称，也可以调整当前阶段顺序。</span>
+      </div>
+      <div class="stack-form">
+        <input
+          :value="focusedStage.name"
+          type="text"
+          placeholder="阶段名称"
+          @input="$emit('set-stage-field', focusedStage, 'name', $event.target.value)"
+        />
+        <div class="run-action-row">
+          <button
+            class="secondary-button compact"
+            type="button"
+            :disabled="selectedPipeline.stages.findIndex((stage) => stage.id === focusedStage.id) === 0"
+            @click="$emit('move-stage', focusedStage, -1)"
+          >
+            上移阶段
+          </button>
+          <button
+            class="secondary-button compact"
+            type="button"
+            :disabled="selectedPipeline.stages.findIndex((stage) => stage.id === focusedStage.id) === selectedPipeline.stages.length - 1"
+            @click="$emit('move-stage', focusedStage, 1)"
+          >
+            下移阶段
+          </button>
+        </div>
+      </div>
     </div>
 
     <div v-if="focusedStage" class="toolbar-group action-editor">
@@ -104,7 +213,28 @@ defineEmits([
         <p>Action 编排</p>
         <span>定义每个阶段的 owner、输入、输出和门禁。</span>
       </div>
-      <article v-for="action in focusedStage.actions" :key="action.id" class="action-card">
+      <article v-for="(action, index) in focusedStage.actions" :key="action.id" class="action-card">
+        <div class="node-card-header">
+          <strong>Action {{ index + 1 }}</strong>
+          <div class="order-actions">
+            <button
+              class="ghost-button compact order-action-button"
+              type="button"
+              :disabled="index === 0"
+              @click="$emit('move-action', focusedStage, action, -1)"
+            >
+              ↑
+            </button>
+            <button
+              class="ghost-button compact order-action-button"
+              type="button"
+              :disabled="index === focusedStage.actions.length - 1"
+              @click="$emit('move-action', focusedStage, action, 1)"
+            >
+              ↓
+            </button>
+          </div>
+        </div>
         <label>
           <span>Action 名称</span>
           <input v-model="action.name" type="text" />

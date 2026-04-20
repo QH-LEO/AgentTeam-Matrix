@@ -116,9 +116,13 @@ function updateLaunchMode(mode) {
               :csv-value="studio.csvValue"
               @create-pipeline="studio.createPipeline"
               @select-pipeline="studio.selectPipeline"
+              @set-pipeline-field="studio.setPipelineField"
               @add-stage="studio.addStage"
               @focus-stage="studio.focusStage"
+              @set-stage-field="studio.setStageField"
+              @move-stage="studio.moveStage"
               @add-action="studio.addAction"
+              @move-action="studio.moveAction"
               @set-csv-list="studio.setCsvList"
             />
 

@@ -1,4 +1,5 @@
 export const DEFAULT_PROJECT_PATH = "/Users/leo/Projects/agentflow-platform";
+export const DEFAULT_CLAUDE_DIR = "/Users/leo/.claude";
 
 export const DEFAULT_DELEGATION_POLICY = {
   defaultMode: "self_first",
@@ -109,6 +110,8 @@ export function normalizePipeline(value) {
     name: String(value.name),
     leaderAgentName,
     projectPath: String(value.projectPath || DEFAULT_PROJECT_PATH),
+    claudeDir: String(value.claudeDir || DEFAULT_CLAUDE_DIR),
+    sharedAgentsDir: String(value.sharedAgentsDir || defaultSharedAgentsDir(value.claudeDir || DEFAULT_CLAUDE_DIR)),
     delegationPolicy: normalizeDelegationPolicy(value.delegationPolicy),
     qualityGates: normalizeQualityGates(value.qualityGates),
     stages,
@@ -118,6 +121,10 @@ export function normalizePipeline(value) {
   pipeline.sop = normalizeSop(value.sop, pipeline);
 
   return pipeline;
+}
+
+function defaultSharedAgentsDir(claudeDir) {
+  return `${String(claudeDir || DEFAULT_CLAUDE_DIR).replace(/\/+$/, "")}/agents`;
 }
 
 export function normalizeDelegationPolicy(policy = {}) {

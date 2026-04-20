@@ -2,6 +2,7 @@ import { computed, onMounted, reactive, ref, toRefs, watch } from "vue";
 import { apiGet, apiPost, clonePayload } from "../lib/api.js";
 
 const DEFAULT_PROJECT_PATH = "/Users/leo/Projects/agentflow-platform";
+const DEFAULT_CLAUDE_DIR = "/Users/leo/.claude";
 
 const approvalOptions = [
   { key: "requirement-review", label: "需求确认" },
@@ -74,6 +75,8 @@ const defaultPipelines = [
     name: "核心研发流程",
     leaderAgentName: "agentflow-core-rd-team-leader",
     projectPath: DEFAULT_PROJECT_PATH,
+    claudeDir: DEFAULT_CLAUDE_DIR,
+    sharedAgentsDir: defaultSharedAgentsDir(DEFAULT_CLAUDE_DIR),
     delegationPolicy: clonePayload(defaultDelegationPolicy),
     qualityGates: clonePayload(defaultQualityGates),
     stages: [
@@ -149,6 +152,8 @@ export function useAgentFlowStudio() {
       pipelineName: "",
       leaderAgentName: "",
       projectPath: DEFAULT_PROJECT_PATH,
+      claudeDir: DEFAULT_CLAUDE_DIR,
+      sharedAgentsDir: defaultSharedAgentsDir(DEFAULT_CLAUDE_DIR),
       stageName: "",
       agentStageId: "",
       sharedAgentName: "",
@@ -192,6 +197,10 @@ export function useAgentFlowStudio() {
 
   const currentMenuLabel = computed(
     () => menuItems.find((item) => item.key === state.activeMenu)?.label ?? "工作台"
+  );
+  const selectedClaudeDir = computed(() => selectedPipeline.value?.claudeDir || DEFAULT_CLAUDE_DIR);
+  const selectedSharedAgentsDir = computed(
+    () => selectedPipeline.value?.sharedAgentsDir || defaultSharedAgentsDir(selectedClaudeDir.value)
   );
 
   const hasStages = computed(() => !!selectedPipeline.value?.stages.length);
@@ -281,6 +290,9 @@ export function useAgentFlowStudio() {
     selectedPipeline,
     (pipeline) => {
       syncFocusForPipeline(state, pipeline);
+      state.forms.projectPath = pipeline?.projectPath || DEFAULT_PROJECT_PATH;
+      state.forms.claudeDir = pipeline?.claudeDir || DEFAULT_CLAUDE_DIR;
+      state.forms.sharedAgentsDir = pipeline?.sharedAgentsDir || defaultSharedAgentsDir(pipeline?.claudeDir || DEFAULT_CLAUDE_DIR);
     },
     { immediate: true }
   );
@@ -291,6 +303,14 @@ export function useAgentFlowStudio() {
       schedulePreflight();
     },
     { deep: true }
+  );
+
+  watch(
+    selectedSharedAgentsDir,
+    () => {
+      scheduleLoadAvailableAgents();
+    },
+    { immediate: true }
   );
 
   function setMenu(menuKey) {
@@ -319,6 +339,8 @@ export function useAgentFlowStudio() {
       name,
       leaderAgentName: state.forms.leaderAgentName.trim() || toLeaderAgentName(name, pipelineId),
       projectPath: state.forms.projectPath.trim() || DEFAULT_PROJECT_PATH,
+      claudeDir: state.forms.claudeDir.trim() || DEFAULT_CLAUDE_DIR,
+      sharedAgentsDir: state.forms.sharedAgentsDir.trim() || defaultSharedAgentsDir(state.forms.claudeDir.trim() || DEFAULT_CLAUDE_DIR),
       delegationPolicy: clonePayload(defaultDelegationPolicy),
       qualityGates: clonePayload(defaultQualityGates),
       stages: [],
@@ -330,6 +352,9 @@ export function useAgentFlowStudio() {
     state.focusedAgentId = "";
     state.forms.pipelineName = "";
     state.forms.leaderAgentName = "";
+    state.forms.projectPath = pipeline.projectPath;
+    state.forms.claudeDir = pipeline.claudeDir;
+    state.forms.sharedAgentsDir = pipeline.sharedAgentsDir;
     state.forms.stageName = "";
     state.activeMenu = "pipeline";
     lastAction.value = `已创建本地流水线：${pipeline.name}`;
@@ -435,6 +460,50 @@ export function useAgentFlowStudio() {
     syncDerivedPipeline(selectedPipeline.value);
   }
 
+  function setPipelineField(key, value) {
+    if (!selectedPipeline.value) return;
+    if (key === "claudeDir") {
+      const currentSharedDir = selectedPipeline.value.sharedAgentsDir || defaultSharedAgentsDir(selectedPipeline.value.claudeDir);
+      const previousDefaultSharedDir = defaultSharedAgentsDir(selectedPipeline.value.claudeDir || DEFAULT_CLAUDE_DIR);
+      if (!currentSharedDir || currentSharedDir === previousDefaultSharedDir) {
+        selectedPipeline.value.sharedAgentsDir = defaultSharedAgentsDir(value || DEFAULT_CLAUDE_DIR);
+      }
+    }
+    if (key === "projectPath") {
+      selectedPipeline.value[key] = value || DEFAULT_PROJECT_PATH;
+    } else if (key === "claudeDir") {
+      selectedPipeline.value[key] = value || DEFAULT_CLAUDE_DIR;
+    } else if (key === "sharedAgentsDir") {
+      selectedPipeline.value[key] = value || defaultSharedAgentsDir(selectedPipeline.value.claudeDir || DEFAULT_CLAUDE_DIR);
+    } else {
+      selectedPipeline.value[key] = value;
+    }
+    syncDerivedPipeline(selectedPipeline.value);
+    lastAction.value = `已更新${pipelineFieldLabel(key)}`;
+  }
+
+  function setStageField(stage, key, value) {
+    if (!selectedPipeline.value || !stage) return;
+    stage[key] = value;
+    syncDerivedPipeline(selectedPipeline.value);
+    lastAction.value = `已更新阶段${stage.name || ""}`;
+  }
+
+  function moveStage(stage, direction) {
+    if (!selectedPipeline.value || !stage) return;
+    moveItem(selectedPipeline.value.stages, stage.id, direction);
+    syncDerivedPipeline(selectedPipeline.value);
+    focusStage(stage);
+    lastAction.value = `${stage.name} 已${direction < 0 ? "上移" : "下移"}`;
+  }
+
+  function moveAction(stage, action, direction) {
+    if (!selectedPipeline.value || !stage || !action) return;
+    moveItem(stage.actions, action.id, direction);
+    syncDerivedPipeline(selectedPipeline.value);
+    lastAction.value = `${action.name} 已${direction < 0 ? "上移" : "下移"}`;
+  }
+
   function addQualityGate() {
     if (!selectedPipeline.value) return;
     selectedPipeline.value.qualityGates.push({
@@ -523,7 +592,9 @@ export function useAgentFlowStudio() {
 
   async function loadAvailableAgents() {
     try {
-      const payload = await apiGet("/api/agents");
+      const payload = await apiGet(
+        `/api/agents?claudeDir=${encodeURIComponent(selectedClaudeDir.value)}&sharedAgentsDir=${encodeURIComponent(selectedSharedAgentsDir.value)}`
+      );
       availableClaudeAgents.value = payload.agents || [];
     } catch {
       availableClaudeAgents.value = [];
@@ -685,6 +756,13 @@ export function useAgentFlowStudio() {
     }, 900);
   }
 
+  function scheduleLoadAvailableAgents() {
+    window.clearTimeout(scheduleLoadAvailableAgents.timer);
+    scheduleLoadAvailableAgents.timer = window.setTimeout(() => {
+      loadAvailableAgents();
+    }, 350);
+  }
+
   async function refreshPreflight(options = {}) {
     const { silent = true, throwOnError = false } = options;
     if (!selectedPipeline.value) return null;
@@ -761,9 +839,13 @@ export function useAgentFlowStudio() {
     selectPipeline,
     createPipeline,
     addStage,
+    setPipelineField,
+    setStageField,
+    moveStage,
     addAgent,
     addSkill,
     addAction,
+    moveAction,
     addQualityGate,
     focusStage,
     focusAgent,
@@ -870,6 +952,8 @@ function normalizePipeline(pipeline) {
     ...pipeline,
     leaderAgentName: pipeline.leaderAgentName || toLeaderAgentName(pipeline.name, pipeline.id),
     projectPath: pipeline.projectPath || DEFAULT_PROJECT_PATH,
+    claudeDir: pipeline.claudeDir || DEFAULT_CLAUDE_DIR,
+    sharedAgentsDir: pipeline.sharedAgentsDir || defaultSharedAgentsDir(pipeline.claudeDir || DEFAULT_CLAUDE_DIR),
     delegationPolicy: normalizePolicy(pipeline.delegationPolicy),
     qualityGates: normalizeQualityGates(pipeline.qualityGates),
     stages: (pipeline.stages || []).map((stage, index) => normalizeStage(stage, index, pipeline.stages || [])),
@@ -1031,6 +1115,35 @@ function buildDefaultAction(stageId, stageName, agents, inputs) {
     outputs: agents[0]?.produce || inferProduce(stageName, ""),
     gates: inferGates(stageName),
   };
+}
+
+function moveItem(list, itemId, direction) {
+  const index = list.findIndex((item) => item.id === itemId);
+  const targetIndex = index + direction;
+  if (index < 0 || targetIndex < 0 || targetIndex >= list.length) return;
+  const [item] = list.splice(index, 1);
+  list.splice(targetIndex, 0, item);
+}
+
+function pipelineFieldLabel(key) {
+  switch (key) {
+    case "name":
+      return "流水线名称";
+    case "leaderAgentName":
+      return "Team Leader 名称";
+    case "projectPath":
+      return "项目地址";
+    case "claudeDir":
+      return "Claude 目录";
+    case "sharedAgentsDir":
+      return "共享 Agent 目录";
+    default:
+      return "";
+  }
+}
+
+function defaultSharedAgentsDir(claudeDir) {
+  return `${String(claudeDir || DEFAULT_CLAUDE_DIR).replace(/\/+$/, "")}/agents`;
 }
 
 function inferWatchForStage(pipeline, stage) {

@@ -2,11 +2,11 @@
 
 - Default mode: self_first
 - Allow subagents: yes
-- Allow agent team: yes
+- Allow agent team: no
 - Allow recursive delegation: yes
 - Max depth: 2
 - Max parallel agents: 4
-- Human confirmations: architecture-review, write-files, destructive-command, deployment
+- Human confirmations: destructive-command, deployment, requirement-review, architecture-review
 
 ## Decision Rules
 
