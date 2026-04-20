@@ -47,17 +47,17 @@ defineEmits([
       <input
         v-model="forms.projectPath"
         type="text"
-        placeholder="项目地址，例如：/Users/leo/Projects/agentflow-platform"
+        placeholder="项目地址，默认当前工程目录，例如：. 或 /path/to/project"
       />
       <input
         v-model="forms.claudeDir"
         type="text"
-        placeholder="Claude 目录，例如：/Users/leo/.claude"
+        placeholder="Claude 目录，默认 ~/.claude"
       />
       <input
         v-model="forms.sharedAgentsDir"
         type="text"
-        placeholder="共享 Agent 目录，例如：/Users/leo/.claude/agents"
+        placeholder="共享 Agent 目录，默认 ~/.claude/agents"
       />
     </div>
 

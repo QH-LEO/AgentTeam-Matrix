@@ -44,7 +44,7 @@ defineEmits(["add-skill", "focus-stage", "focus-agent"]);
         <input
           v-model="forms.skillPath"
           type="text"
-          placeholder="Skill 目录，例如：.claude/skills/using-agentflow 或 /Users/leo/.claude/skills/xxx"
+          placeholder="Skill 目录，例如：.claude/skills/using-agentflow 或 ~/.claude/skills/xxx"
         />
         <div class="form-note">
           这里只保存目录引用，不在页面里编辑 SKILL.md；编译时会把路径写入 Leader / Agent 描述，方便 Claude 按目录加载能力。

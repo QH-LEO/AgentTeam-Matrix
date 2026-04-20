@@ -68,7 +68,7 @@ defineEmits([
         </p>
         <div class="launch-command-preview">
           <span>项目目录</span>
-          <strong>{{ currentRun?.pipeline?.projectPath }}</strong>
+          <strong>{{ launchPreview?.resolvedProjectPath || currentRun?.pipeline?.projectPath }}</strong>
           <span>Claude Agent</span>
           <strong>{{ currentRun?.pipeline?.leaderAgentName }}</strong>
           <span>启动模式</span>

@@ -1,5 +1,6 @@
 import path from "node:path";
 import { normalizeDefinitionRequest, normalizeLaunchMode, normalizePipeline, toLeaderAgentName } from "./schema.js";
+import { resolveProjectPath } from "./storage.js";
 
 export function buildCompilePlan(request, existingDefinition, paths) {
   const definition = normalizeDefinitionRequest(request, existingDefinition);
@@ -62,9 +63,9 @@ export function lintDefinition(definition, paths = {}) {
       if (agent.source === "shared" && paths.agentExists && !paths.agentExists(agent.agentName)) {
         issues.push({
           id: `shared-agent-${agent.agentName}`,
-          label: `共享 Agent：${agent.agentName}`,
+          label: `共享 Agent：${agent.name}`,
           status: "fail",
-          detail: "共享 Agent 文件不存在，source=shared 不会自动覆盖或创建。",
+          detail: `未找到本机绑定 @${agent.agentName}，请先在 Agent 职责页为该角色绑定真实共享 Agent。`,
         });
       }
       if (!agent.produce.length) {
@@ -121,7 +122,7 @@ export function lintDefinition(definition, paths = {}) {
 
 export function buildArtifacts(definition, paths) {
   const pipeline = definition.pipeline;
-  const projectRoot = pipeline.projectPath;
+  const projectRoot = resolveProjectPath(pipeline.projectPath, paths.projectRoot);
   const leaderAgentName = pipeline.leaderAgentName || toLeaderAgentName(pipeline.name);
   const artifacts = [
     {
@@ -152,7 +153,12 @@ export function buildArtifacts(definition, paths) {
     {
       type: "compiled-launch-prompt",
       path: path.join(projectRoot, ".agentflow", "compiled", "launch-prompt.md"),
-      nextContent: buildLaunchPrompt({ pipeline, requirement: "", launchMode: "single-leader" }).prompt,
+      nextContent: buildLaunchPrompt({
+        pipeline,
+        requirement: "",
+        launchMode: "single-leader",
+        projectRoot: paths.projectRoot,
+      }).prompt,
     },
     {
       type: "using-agentflow-skill",
@@ -180,16 +186,24 @@ export function buildArtifacts(definition, paths) {
   return artifacts;
 }
 
-export function buildLaunchPrompt({ pipeline: rawPipeline, requirement = "", launchMode = "single-leader", runId = "" }) {
+export function buildLaunchPrompt({
+  pipeline: rawPipeline,
+  requirement = "",
+  launchMode = "single-leader",
+  runId = "",
+  projectRoot,
+}) {
   const pipeline = normalizePipeline(rawPipeline);
   const mode = normalizeLaunchMode(launchMode);
   const leaderAgentName = pipeline.leaderAgentName || toLeaderAgentName(pipeline.name);
-  const prompt = renderLaunchPrompt(pipeline, requirement, mode);
-  const command = buildLaunchCommand(pipeline, prompt, leaderAgentName, runId);
+  const resolvedProjectPath = resolveProjectPath(pipeline.projectPath, projectRoot);
+  const prompt = renderLaunchPrompt(pipeline, requirement, mode, resolvedProjectPath);
+  const command = buildLaunchCommand(pipeline, prompt, leaderAgentName, runId, resolvedProjectPath);
 
   return {
     leaderAgentName,
     launchMode: mode,
+    resolvedProjectPath,
     prompt,
     command,
   };
@@ -378,7 +392,7 @@ Important:
 `;
 }
 
-function renderLaunchPrompt(pipeline, requirement, launchMode) {
+function renderLaunchPrompt(pipeline, requirement, launchMode, resolvedProjectPath) {
   const leaderAgentName = pipeline.leaderAgentName || toLeaderAgentName(pipeline.name);
   const agents = pipeline.stages
     .flatMap((stage) => stage.agents.map((agent) => `- @${agent.agentName} (${agent.name})：${agent.responsibility || agent.description}`))
@@ -390,7 +404,7 @@ function renderLaunchPrompt(pipeline, requirement, launchMode) {
 你正在 AgentFlow 管理的「${pipeline.name}」中工作。
 
 项目路径：
-${pipeline.projectPath}
+${resolvedProjectPath}
 
 请先加载并遵守 using-agentflow 规则，然后处理以下需求：
 
@@ -413,7 +427,7 @@ ${agents}
 
 结构化流水线摘要：
 
-${renderRunSummary(pipeline)}
+${renderRunSummary(pipeline, resolvedProjectPath)}
 `;
 }
 
@@ -440,7 +454,7 @@ function buildModeInstruction(launchMode, pipeline) {
 只有当任务明确需要隔离探索、专项审查或跨角色协作时，才创建 subagent 或建议升级到 agent team。`;
 }
 
-function renderRunSummary(pipeline) {
+function renderRunSummary(pipeline, resolvedProjectPath = pipeline.projectPath) {
   const stages = pipeline.stages
     .map((stage, index) => {
       const agents = stage.agents.length
@@ -454,7 +468,7 @@ function renderRunSummary(pipeline) {
   return [
     `Pipeline: ${pipeline.name}`,
     `Leader agent: @${pipeline.leaderAgentName || toLeaderAgentName(pipeline.name)}`,
-    `Project: ${pipeline.projectPath}`,
+    `Project: ${resolvedProjectPath}`,
     "",
     "Delegation policy:",
     JSON.stringify(pipeline.delegationPolicy, null, 2),
@@ -464,13 +478,13 @@ function renderRunSummary(pipeline) {
   ].join("\n");
 }
 
-function buildLaunchCommand(pipeline, prompt, leaderAgentName, runId) {
+function buildLaunchCommand(pipeline, prompt, leaderAgentName, runId, resolvedProjectPath) {
   return [
-    `cd ${shellQuote(pipeline.projectPath)}`,
+    `cd ${shellQuote(resolvedProjectPath)}`,
     "clear",
     `printf '%s\\n' ${shellQuote("AgentFlow 一键启动")}`,
     runId ? `printf '%s\\n' ${shellQuote(`Run ID: ${runId}`)}` : "",
-    `printf '%s\\n' ${shellQuote(`Project: ${pipeline.projectPath}`)}`,
+    `printf '%s\\n' ${shellQuote(`Project: ${resolvedProjectPath}`)}`,
     `printf '%s\\n' ${shellQuote(`Leader: @${leaderAgentName}`)}`,
     `claude --agent ${leaderAgentName} ${shellQuote(prompt)}`,
   ].filter(Boolean).join("; ");

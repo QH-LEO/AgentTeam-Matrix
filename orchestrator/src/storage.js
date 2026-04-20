@@ -1,10 +1,12 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { normalizeStoredDefinition } from "./schema.js";
 
 export const PROJECT_ROOT = path.resolve(process.cwd(), "..");
 export const DEFINITION_PATH = path.join(PROJECT_ROOT, "configs", "agentflow.pipeline.json");
-export const DEFAULT_CLAUDE_DIR = path.join(process.env.HOME || "/Users/leo", ".claude");
+export const HOME_DIR = os.homedir();
+export const DEFAULT_CLAUDE_DIR = path.join(HOME_DIR, ".claude");
 
 export function getPaths(options = {}) {
   const claudeDir = getClaudeDir(options.claudeDir);
@@ -59,23 +61,20 @@ export function listClaudeAgents(options = {}) {
     .map((file) => {
       const fullPath = path.join(agentsDir, file);
       const content = fs.readFileSync(fullPath, "utf8");
-      const name = content.match(/^name:\s*(.+)$/m)?.[1]?.trim() || file.replace(/\.md$/, "");
+      const agentName = file.replace(/\.md$/, "");
+      const name = content.match(/^name:\s*(.+)$/m)?.[1]?.trim() || agentName;
       const description = content.match(/^description:\s*(.+)$/m)?.[1]?.trim() || "";
       const model = content.match(/^model:\s*(.+)$/m)?.[1]?.trim() || "sonnet";
       const tools = (content.match(/^tools:\s*(.+)$/m)?.[1] || "")
         .split(",")
         .map((tool) => tool.trim())
         .filter(Boolean);
-      return { name, description, model, tools, path: fullPath };
+      return { agentName, name, description, model, tools, path: fullPath };
     });
 }
 
 export function getClaudeDir(claudeDir) {
-  const target = String(claudeDir || DEFAULT_CLAUDE_DIR).trim() || DEFAULT_CLAUDE_DIR;
-  if (target.startsWith("~/")) {
-    return path.join(process.env.HOME || "/Users/leo", target.slice(2));
-  }
-  return path.resolve(target);
+  return resolveConfiguredPath(claudeDir, { fallback: "~/.claude" });
 }
 
 export function getClaudeAgentsDir(claudeDir) {
@@ -83,20 +82,32 @@ export function getClaudeAgentsDir(claudeDir) {
 }
 
 export function getSharedAgentsDir(sharedAgentsDir, claudeDir) {
-  const target = String(sharedAgentsDir || "").trim();
-  if (!target) return getClaudeAgentsDir(claudeDir);
+  return resolveConfiguredPath(sharedAgentsDir, {
+    fallback: getClaudeAgentsDir(claudeDir),
+  });
+}
+
+export function resolveProjectPath(projectPath, baseDir = PROJECT_ROOT) {
+  return resolveConfiguredPath(projectPath, { fallback: ".", baseDir });
+}
+
+export function resolveConfiguredPath(value, options = {}) {
+  const { fallback = "", baseDir = PROJECT_ROOT } = options;
+  const target = String(value || fallback).trim() || String(fallback).trim();
+  if (!target) return "";
+  if (target === "~") return HOME_DIR;
   if (target.startsWith("~/")) {
-    return path.join(process.env.HOME || "/Users/leo", target.slice(2));
+    return path.join(HOME_DIR, target.slice(2));
   }
-  return path.resolve(target);
+  return path.isAbsolute(target) ? path.normalize(target) : path.resolve(baseDir, target);
 }
 
-export function getAgentPath(agentName, claudeDir) {
-  return path.join(claudeDir, `${agentName}.md`);
+export function getAgentPath(agentName, agentsDir) {
+  return path.join(agentsDir, `${agentName}.md`);
 }
 
-export function agentExists(agentName, claudeDir) {
-  return fs.existsSync(getAgentPath(agentName, claudeDir));
+export function agentExists(agentName, agentsDir) {
+  return fs.existsSync(getAgentPath(agentName, agentsDir));
 }
 
 export function canWriteDirectory(directory) {

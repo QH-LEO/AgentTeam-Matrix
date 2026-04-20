@@ -6,7 +6,9 @@
       "id": "p1",
       "name": "核心研发流程",
       "leaderAgentName": "agentflow-core-rd-team-leader",
-      "projectPath": "/Users/leo/Projects/agentflow-platform",
+      "projectPath": ".",
+      "claudeDir": "~/.claude",
+      "sharedAgentsDir": "~/.claude/agents",
       "delegationPolicy": {
         "defaultMode": "self_first",
         "allowSubAgents": true,
@@ -514,7 +516,9 @@
     "id": "p1",
     "name": "核心研发流程",
     "leaderAgentName": "agentflow-core-rd-team-leader",
-    "projectPath": "/Users/leo/Projects/agentflow-platform",
+    "projectPath": ".",
+    "claudeDir": "~/.claude",
+    "sharedAgentsDir": "~/.claude/agents",
     "delegationPolicy": {
       "defaultMode": "self_first",
       "allowSubAgents": true,

@@ -148,6 +148,7 @@ function updateLaunchMode(mode) {
               @add-agent="studio.addAgent"
               @focus-stage="studio.focusStage"
               @focus-agent="studio.focusAgent"
+              @set-agent-field="studio.setAgentField"
               @set-csv-list="studio.setCsvList"
             />
 
@@ -207,6 +208,9 @@ function updateLaunchMode(mode) {
             :readonly="canvasReadonly"
             @focus-stage="studio.focusStage"
             @focus-agent="studio.focusAgent"
+            @set-stage-field="studio.setStageField"
+            @add-stage-at="studio.addStageAt"
+            @move-stage-to-index="studio.moveStageToIndex"
           />
 
           <button v-else class="canvas-rail" type="button" @click="toggleCanvasPanel">

@@ -1,8 +1,8 @@
 import { computed, onMounted, reactive, ref, toRefs, watch } from "vue";
 import { apiGet, apiPost, clonePayload } from "../lib/api.js";
 
-const DEFAULT_PROJECT_PATH = "/Users/leo/Projects/agentflow-platform";
-const DEFAULT_CLAUDE_DIR = "/Users/leo/.claude";
+const DEFAULT_PROJECT_PATH = ".";
+const DEFAULT_CLAUDE_DIR = "~/.claude";
 
 const approvalOptions = [
   { key: "requirement-review", label: "需求确认" },
@@ -215,7 +215,7 @@ export function useAgentFlowStudio() {
   });
 
   const sharedClaudeAgents = computed(() =>
-    availableClaudeAgents.value.filter((agent) => !agent.name.endsWith("-team-leader"))
+    availableClaudeAgents.value.filter((agent) => !agent.agentName.endsWith("-team-leader"))
   );
 
   const focusedStage = computed(() => {
@@ -372,14 +372,39 @@ export function useAgentFlowStudio() {
       return;
     }
 
-    const stage = normalizeStage({ id: createId("s"), name, agents: [] }, pipeline.stages.length);
-    pipeline.stages.push(stage);
+    addStageAt(pipeline.stages.length, name);
+  }
+
+  function addStageAt(index = null, rawName = "") {
+    const pipeline = selectedPipeline.value;
+    if (!pipeline) {
+      lastAction.value = "请先选择流水线";
+      return;
+    }
+
+    const insertIndex = Number.isInteger(index)
+      ? Math.max(0, Math.min(index, pipeline.stages.length))
+      : pipeline.stages.length;
+    const stageName = String(rawName || "").trim() || `新阶段 ${insertIndex + 1}`;
+    const stageId = createId("s");
+    const previousOutputs = insertIndex > 0
+      ? inferStageOutputs(pipeline.stages[insertIndex - 1])
+      : ["UserRequirement"];
+    const stage = {
+      id: stageId,
+      name: stageName,
+      agents: [],
+      actions: [buildDefaultAction(stageId, stageName, [], previousOutputs)],
+    };
+
+    pipeline.stages.splice(insertIndex, 0, stage);
     syncDerivedPipeline(pipeline);
     state.focusedStageId = stage.id;
     state.focusedAgentId = "";
     state.forms.stageName = "";
-    state.forms.agentStageId ||= stage.id;
-    state.forms.skillStageId ||= stage.id;
+    state.forms.agentStageId = stage.id;
+    state.forms.skillStageId = stage.id;
+    state.forms.skillAgentId = "";
     lastAction.value = `已添加阶段：${stage.name}`;
   }
 
@@ -390,15 +415,16 @@ export function useAgentFlowStudio() {
     const stage = pipeline.stages.find((item) => item.id === state.forms.agentStageId);
     if (!stage) return;
 
-    const sharedAgent = sharedClaudeAgents.value.find((agent) => agent.name === state.forms.sharedAgentName);
+    const sharedAgent = sharedClaudeAgents.value.find((agent) => agent.agentName === state.forms.sharedAgentName);
     const name = state.forms.agentName.trim();
     if (!sharedAgent && !name) return;
+    const roleName = name || sharedAgent?.name || sharedAgent?.agentName || "未命名 Agent";
 
     const agent = normalizeAgent({
       id: createId("a"),
-      name: sharedAgent ? sharedAgent.name.replace(/^agentflow-/, "") : name,
-      agentName: sharedAgent ? sharedAgent.name : toAgentName(name),
-      description: sharedAgent?.description || `${name} for AgentFlow pipeline.`,
+      name: roleName,
+      agentName: sharedAgent ? sharedAgent.agentName : toAgentName(name),
+      description: sharedAgent?.description || `${roleName} for AgentFlow pipeline.`,
       responsibility: state.forms.agentResp.trim() || sharedAgent?.description || "",
       source: sharedAgent ? "shared" : "managed",
       model: sharedAgent?.model || "sonnet",
@@ -460,6 +486,37 @@ export function useAgentFlowStudio() {
     syncDerivedPipeline(selectedPipeline.value);
   }
 
+  function setAgentField(stage, agent, key, value) {
+    if (!selectedPipeline.value || !stage || !agent) return;
+
+    const nextValue = typeof value === "string" ? value.trim() : value;
+    const previousAgentName = agent.agentName;
+
+    if (key === "name") {
+      agent.name = nextValue || "未命名 Agent";
+    } else if (key === "agentName") {
+      agent.agentName = nextValue || previousAgentName;
+      const boundSharedAgent = sharedClaudeAgents.value.find((item) => item.agentName === agent.agentName);
+      if (boundSharedAgent) {
+        agent.description = boundSharedAgent.description || agent.description;
+        agent.model = boundSharedAgent.model || agent.model;
+        agent.tools = boundSharedAgent.tools?.length ? [...boundSharedAgent.tools] : agent.tools;
+      }
+      for (const action of stage.actions) {
+        if (action.owner === previousAgentName) {
+          action.owner = agent.agentName;
+        }
+      }
+    } else if (key === "responsibility") {
+      agent.responsibility = nextValue;
+    } else {
+      agent[key] = nextValue;
+    }
+
+    syncDerivedPipeline(selectedPipeline.value);
+    lastAction.value = `已更新 Agent：${agent.name}`;
+  }
+
   function setPipelineField(key, value) {
     if (!selectedPipeline.value) return;
     if (key === "claudeDir") {
@@ -495,6 +552,24 @@ export function useAgentFlowStudio() {
     syncDerivedPipeline(selectedPipeline.value);
     focusStage(stage);
     lastAction.value = `${stage.name} 已${direction < 0 ? "上移" : "下移"}`;
+  }
+
+  function moveStageToIndex(stageId, targetIndex) {
+    const pipeline = selectedPipeline.value;
+    if (!pipeline) return;
+
+    const currentIndex = pipeline.stages.findIndex((stage) => stage.id === stageId);
+    if (currentIndex < 0) return;
+
+    const boundedTarget = Math.max(0, Math.min(targetIndex, pipeline.stages.length));
+    const insertIndex = currentIndex < boundedTarget ? boundedTarget - 1 : boundedTarget;
+    if (insertIndex === currentIndex) return;
+
+    const [stage] = pipeline.stages.splice(currentIndex, 1);
+    pipeline.stages.splice(insertIndex, 0, stage);
+    syncDerivedPipeline(pipeline);
+    focusStage(stage);
+    lastAction.value = `${stage.name} 已调整到第 ${insertIndex + 1} 位`;
   }
 
   function moveAction(stage, action, direction) {
@@ -839,9 +914,12 @@ export function useAgentFlowStudio() {
     selectPipeline,
     createPipeline,
     addStage,
+    addStageAt,
     setPipelineField,
     setStageField,
+    setAgentField,
     moveStage,
+    moveStageToIndex,
     addAgent,
     addSkill,
     addAction,

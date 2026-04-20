@@ -1,5 +1,5 @@
-export const DEFAULT_PROJECT_PATH = "/Users/leo/Projects/agentflow-platform";
-export const DEFAULT_CLAUDE_DIR = "/Users/leo/.claude";
+export const DEFAULT_PROJECT_PATH = ".";
+export const DEFAULT_CLAUDE_DIR = "~/.claude";
 
 export const DEFAULT_DELEGATION_POLICY = {
   defaultMode: "self_first",

@@ -1487,12 +1487,23 @@ textarea:focus {
   min-height: 0;
   overflow-x: auto;
   overflow-y: auto;
+  overscroll-behavior: contain;
   background:
     linear-gradient(transparent 31px, rgba(148, 163, 184, 0.06) 32px),
     linear-gradient(90deg, transparent 31px, rgba(148, 163, 184, 0.06) 32px),
     radial-gradient(circle at top right, rgba(36, 115, 255, 0.12), transparent 28%),
     #08101a;
   background-size: 32px 32px, 32px 32px, auto, auto;
+  cursor: grab;
+}
+
+.canvas-panel.is-dragging {
+  cursor: grabbing;
+  scroll-behavior: auto;
+}
+
+.canvas-panel.is-dragging * {
+  cursor: grabbing !important;
 }
 
 .canvas-mode-label {
@@ -1547,8 +1558,56 @@ textarea:focus {
   display: flex;
   align-items: flex-start;
   width: max-content;
-  gap: 22px;
+  gap: 0;
   justify-content: flex-start;
+}
+
+.stage-separator {
+  width: 92px;
+  min-height: 100%;
+  display: grid;
+  align-content: start;
+  justify-items: center;
+  gap: 14px;
+  padding-top: 66px;
+  transition: transform 160ms ease, opacity 160ms ease;
+}
+
+.stage-separator.is-leading {
+  width: 56px;
+}
+
+.stage-separator.is-drop-active {
+  transform: scale(1.03);
+}
+
+.stage-separator.is-drop-active::before {
+  content: "";
+  width: 42px;
+  height: 120px;
+  border: 1px dashed rgba(78, 163, 255, 0.6);
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(36, 115, 255, 0.12), rgba(110, 231, 249, 0.08));
+  box-shadow: 0 0 0 1px rgba(36, 115, 255, 0.08), 0 18px 40px rgba(2, 6, 23, 0.22);
+}
+
+.stage-insert-button {
+  min-width: 74px;
+  padding: 8px 12px;
+  border: 1px dashed rgba(110, 231, 249, 0.26);
+  border-radius: 999px;
+  color: #d8f7ff;
+  background: rgba(9, 17, 29, 0.72);
+  backdrop-filter: blur(12px);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+}
+
+.stage-insert-button:hover {
+  transform: translateY(-1px);
+  border-color: rgba(110, 231, 249, 0.48);
+  background: rgba(13, 24, 40, 0.92);
 }
 
 .stage-column {
@@ -1570,6 +1629,12 @@ textarea:focus {
   border-radius: 24px;
   text-align: left;
   cursor: pointer;
+  user-select: none;
+}
+
+.stage-card.is-drag-source {
+  opacity: 0.52;
+  transform: scale(0.98);
 }
 
 .stage-card:hover {
@@ -1606,6 +1671,25 @@ textarea:focus {
   font-size: 18px;
 }
 
+.stage-title-input {
+  width: 100%;
+  margin-top: 8px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: #f8fbff;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.stage-title-input:focus {
+  outline: none;
+  box-shadow: none;
+}
+
 .agent-list {
   display: grid;
   gap: 16px;
@@ -1618,6 +1702,7 @@ textarea:focus {
   border-left: 4px solid rgba(100, 116, 139, 0.7);
   text-align: left;
   cursor: pointer;
+  user-select: none;
 }
 
 .agent-card:hover {
@@ -1658,6 +1743,8 @@ textarea:focus {
   background: transparent;
   box-shadow: none;
   resize: none;
+  cursor: text;
+  user-select: text;
 }
 
 .agent-summary {
@@ -2183,6 +2270,20 @@ textarea:focus {
   .stage-lane {
     display: grid;
     gap: 18px;
+  }
+
+  .stage-separator,
+  .stage-separator.is-leading {
+    width: auto;
+    min-height: auto;
+    padding-top: 0;
+    gap: 8px;
+  }
+
+  .stage-separator.is-drop-active::before {
+    width: 100%;
+    height: 36px;
+    border-radius: 20px;
   }
 
   .panel-section {

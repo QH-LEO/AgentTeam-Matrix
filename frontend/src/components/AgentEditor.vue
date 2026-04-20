@@ -9,7 +9,7 @@ defineProps({
   csvValue: { type: Function, required: true },
 });
 
-defineEmits(["add-agent", "focus-stage", "focus-agent", "set-csv-list"]);
+defineEmits(["add-agent", "focus-stage", "focus-agent", "set-agent-field", "set-csv-list"]);
 </script>
 
 <template>
@@ -32,15 +32,14 @@ defineEmits(["add-agent", "focus-stage", "focus-agent", "set-csv-list"]);
         </select>
         <select v-model="forms.sharedAgentName">
           <option value="">新建 Agent，不复用</option>
-          <option v-for="agent in sharedClaudeAgents" :key="agent.name" :value="agent.name">
-            {{ agent.name }} · {{ agent.description || "无描述" }}
+          <option v-for="agent in sharedClaudeAgents" :key="agent.agentName" :value="agent.agentName">
+            {{ agent.agentName }} · {{ agent.name || "未命名 Agent" }}
           </option>
         </select>
         <input
           v-model="forms.agentName"
           type="text"
-          :disabled="!!forms.sharedAgentName"
-          placeholder="新建 Agent 名称"
+          placeholder="角色名称，例如：产品经理"
         />
         <textarea
           v-model="forms.agentResp"
@@ -75,7 +74,46 @@ defineEmits(["add-agent", "focus-stage", "focus-agent", "set-csv-list"]);
           @click="$emit('focus-agent', focusedStage, agent)"
           @keyup.enter="$emit('focus-agent', focusedStage, agent)"
         >
-          <strong>{{ agent.agentName }}</strong>
+          <div class="node-card-header">
+            <div>
+              <strong>{{ agent.name }}</strong>
+              <span>@{{ agent.agentName }}</span>
+            </div>
+            <span>{{ agent.source === "shared" ? "Shared" : "Managed" }}</span>
+          </div>
+          <label>
+            <span>角色名称</span>
+            <input
+              :value="agent.name"
+              type="text"
+              @input="$emit('set-agent-field', focusedStage, agent, 'name', $event.target.value)"
+            />
+          </label>
+          <label v-if="agent.source === 'shared'">
+            <span>绑定本机 Agent</span>
+            <select
+              :value="agent.agentName"
+              @change="$emit('set-agent-field', focusedStage, agent, 'agentName', $event.target.value)"
+            >
+              <option
+                v-if="agent.agentName && !sharedClaudeAgents.some((item) => item.agentName === agent.agentName)"
+                :value="agent.agentName"
+              >
+                @{{ agent.agentName }}（当前绑定，目录中未发现）
+              </option>
+              <option v-for="item in sharedClaudeAgents" :key="item.agentName" :value="item.agentName">
+                @{{ item.agentName }} · {{ item.name || item.agentName }}
+              </option>
+            </select>
+          </label>
+          <label v-else>
+            <span>Agent Handle</span>
+            <input
+              :value="agent.agentName"
+              type="text"
+              @input="$emit('set-agent-field', focusedStage, agent, 'agentName', $event.target.value)"
+            />
+          </label>
           <label>
             <span>Watch</span>
             <input
@@ -94,8 +132,15 @@ defineEmits(["add-agent", "focus-stage", "focus-agent", "set-csv-list"]);
           </label>
           <label>
             <span>职责</span>
-            <textarea v-model="agent.responsibility" rows="3"></textarea>
+            <textarea
+              :value="agent.responsibility"
+              rows="3"
+              @input="$emit('set-agent-field', focusedStage, agent, 'responsibility', $event.target.value)"
+            ></textarea>
           </label>
+          <div v-if="agent.source === 'shared'" class="form-note">
+            这里绑定的是本机真实 Claude Agent 文件名；角色名称保留业务语义，委托时会使用上面的 @handle。
+          </div>
         </article>
       </div>
     </template>

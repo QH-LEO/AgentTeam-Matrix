@@ -16,6 +16,8 @@ import {
   listClaudeAgents,
   pathExistsDirectory,
   readDefinition,
+  resolveConfiguredPath,
+  resolveProjectPath,
   withCurrentContent,
   writeArtifacts,
 } from "./storage.js";
@@ -205,6 +207,7 @@ app.post("/api/launch-prompt/preview", (req, res) => {
     pipeline,
     requirement: String(req.body?.requirement || ""),
     launchMode: normalizeLaunchMode(req.body?.launchMode),
+    projectRoot: getPaths().projectRoot,
   }));
 });
 
@@ -218,9 +221,10 @@ app.post("/api/runs", (req, res) => {
   const runId = `run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
   const requirement = String(req.body?.requirement || "");
   const launchMode = normalizeLaunchMode(req.body?.launchMode);
+  const resolvedProjectPath = resolveProjectPath(pipeline.projectPath);
 
-  if (!pathExistsDirectory(pipeline.projectPath)) {
-    res.status(400).json({ error: "invalid projectPath", detail: pipeline.projectPath });
+  if (!pathExistsDirectory(resolvedProjectPath)) {
+    res.status(400).json({ error: "invalid projectPath", detail: resolvedProjectPath });
     return;
   }
 
@@ -275,6 +279,7 @@ app.post("/api/runs/:runId/open-iterm", (req, res) => {
     requirement,
     launchMode,
     runId: run.runId,
+    projectRoot: getPaths().projectRoot,
   });
   const script = buildITermAppleScript(command);
   run.status = "opening";
@@ -304,10 +309,11 @@ function buildPreflightChecks(pipeline) {
   const claudeDir = getClaudeDir(pipeline.claudeDir);
   const claudeAgentsDir = getClaudeAgentsDir(claudeDir);
   const sharedAgentsDir = getSharedAgentsDir(pipeline.sharedAgentsDir, claudeDir);
+  const resolvedProjectPath = resolveProjectPath(pipeline.projectPath);
   const leaderAgentName = pipeline.leaderAgentName;
   const leaderPath = getAgentPath(leaderAgentName, claudeAgentsDir);
   const sharedAgents = pipeline.stages.flatMap((stage) =>
-    stage.agents.filter((agent) => agent.source === "shared").map((agent) => agent.agentName)
+    stage.agents.filter((agent) => agent.source === "shared")
   );
   const skillRefs = pipeline.stages.flatMap((stage) =>
     stage.agents.flatMap((agent) =>
@@ -315,24 +321,24 @@ function buildPreflightChecks(pipeline) {
         .filter((skill) => skill.path)
         .map((skill) => ({
           name: skill.name,
-          path: resolveSkillPath(pipeline.projectPath, skill.path),
+          path: resolveSkillPath(resolvedProjectPath, skill.path),
         }))
     )
   );
-  const missingSharedAgents = sharedAgents.filter((agentName) => !fs.existsSync(getAgentPath(agentName, sharedAgentsDir)));
+  const missingSharedAgents = sharedAgents.filter((agent) => !fs.existsSync(getAgentPath(agent.agentName, sharedAgentsDir)));
   const missingSkillRefs = skillRefs.filter((skill) => !pathExistsDirectory(skill.path));
   const claudeBinary = findExecutable("claude", [
-    "/Users/leo/.local/bin/claude",
+    process.env.HOME ? path.join(process.env.HOME, ".local", "bin", "claude") : "",
     "/opt/homebrew/bin/claude",
     "/usr/local/bin/claude",
     "/usr/bin/claude",
   ]);
   const iTermAvailable = checkITerm().ok;
-  const projectPathExists = pathExistsDirectory(pipeline.projectPath);
+  const projectPathExists = pathExistsDirectory(resolvedProjectPath);
   const agentsDirExists = fs.existsSync(claudeAgentsDir);
   const sharedAgentsDirExists = pathExistsDirectory(sharedAgentsDir);
-  const agentflowDir = path.join(pipeline.projectPath, ".agentflow");
-  const projectClaudeSkillsDir = path.join(pipeline.projectPath, ".claude", "skills");
+  const agentflowDir = path.join(resolvedProjectPath, ".agentflow");
+  const projectClaudeSkillsDir = path.join(resolvedProjectPath, ".claude", "skills");
 
   return [
     {
@@ -351,13 +357,13 @@ function buildPreflightChecks(pipeline) {
       id: "project-path",
       label: "项目地址",
       status: projectPathExists ? "pass" : "fail",
-      detail: projectPathExists ? pipeline.projectPath : `项目目录不存在：${pipeline.projectPath}`,
+      detail: projectPathExists ? resolvedProjectPath : `项目目录不存在：${resolvedProjectPath}`,
     },
     {
       id: "project-write",
       label: "项目写入权限",
-      status: projectPathExists && canWriteDirectory(pipeline.projectPath) ? "pass" : "fail",
-      detail: projectPathExists && canWriteDirectory(pipeline.projectPath)
+      status: projectPathExists && canWriteDirectory(resolvedProjectPath) ? "pass" : "fail",
+      detail: projectPathExists && canWriteDirectory(resolvedProjectPath)
         ? "可写入项目级 AgentFlow 资产"
         : "项目目录不可写，无法生成 .agentflow 或 .claude/skills",
     },
@@ -402,7 +408,7 @@ function buildPreflightChecks(pipeline) {
       label: "共享 Agent 引用",
       status: missingSharedAgents.length ? "fail" : "pass",
       detail: missingSharedAgents.length
-        ? `缺失共享 Agent：${missingSharedAgents.join(", ")}`
+        ? `缺失共享 Agent：${missingSharedAgents.map((agent) => `${agent.name} -> @${agent.agentName}`).join(", ")}`
         : sharedAgents.length
           ? `已找到 ${sharedAgents.length} 个共享 Agent`
           : "当前流水线未引用共享 Agent",
@@ -421,7 +427,7 @@ function buildPreflightChecks(pipeline) {
 }
 
 function resolveSkillPath(projectPath, skillPath) {
-  return path.isAbsolute(skillPath) ? skillPath : path.join(projectPath, skillPath);
+  return resolveConfiguredPath(skillPath, { baseDir: projectPath });
 }
 
 function checkTmux() {
