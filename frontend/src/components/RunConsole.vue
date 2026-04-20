@@ -60,17 +60,19 @@ defineEmits([
 
       <section class="terminal-panel launch-panel">
         <p class="run-panel-label">启动预览</p>
-        <h3>打开 iTerm2 并启动 Claude Team Leader</h3>
+        <h3>打开 iTerm2 并通过主会话拉起 Claude Team Leader</h3>
         <p>
           系统会在 iTerm2 中进入项目目录，然后执行
-          <code>claude --agent {{ currentRun?.pipeline?.leaderAgentName }}</code>。
-          页面不会内嵌 terminal，Claude 运行仍在本地 iTerm2。
+          <code>claude &lt;launch prompt&gt;</code>。
+          launch prompt 的首行会显式调用
+          <code>@"{{ currentRun?.pipeline?.leaderAgentName }} (agent)"</code>，
+          由主会话先做 live handoff，而不是直接把会话伪装成 leader。
         </p>
         <div class="launch-command-preview">
           <span>项目目录</span>
           <strong>{{ launchPreview?.resolvedProjectPath || currentRun?.pipeline?.projectPath }}</strong>
-          <span>Claude Agent</span>
-          <strong>{{ currentRun?.pipeline?.leaderAgentName }}</strong>
+          <span>Live Handle</span>
+          <strong>@"{{ currentRun?.pipeline?.leaderAgentName }} (agent)"</strong>
           <span>启动模式</span>
           <strong>{{ launchMode }}</strong>
         </div>

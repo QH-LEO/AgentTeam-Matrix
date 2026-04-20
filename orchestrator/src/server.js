@@ -8,6 +8,7 @@ import { normalizeDefinitionRequest, normalizeLaunchMode, normalizePipeline } fr
 import {
   canCreateDirectory,
   canWriteDirectory,
+  getDefinitionSyncRecord,
   getClaudeAgentsDir,
   getClaudeDir,
   getSharedAgentsDir,
@@ -16,9 +17,12 @@ import {
   listClaudeAgents,
   pathExistsDirectory,
   readDefinition,
+  readDefinitionFile,
   resolveConfiguredPath,
   resolveProjectPath,
   withCurrentContent,
+  writeDefinition,
+  writeDefinitionSyncRecord,
   writeArtifacts,
 } from "./storage.js";
 
@@ -139,12 +143,78 @@ app.post("/api/definition", (req, res) => {
   }
 
   const written = writeArtifacts(plan.artifacts);
+  persistDefinitionSyncRecord(plan, written, "definition-write");
   res.json({
     definition: plan.definition,
     generatedAgents: written
       .filter((item) => item.type === "leader-agent" || item.type === "managed-agent")
       .map((item) => item.path),
     written,
+  });
+});
+
+app.post("/api/definition/sync-preview", (req, res) => {
+  const pipeline = normalizePipeline(req.body?.pipeline);
+  if (!pipeline) {
+    res.status(400).json({ error: "pipeline is required" });
+    return;
+  }
+
+  const currentDefinition = readDefinition();
+  const syncSource = resolveDefinitionSyncSource(pipeline, currentDefinition);
+  if (!syncSource.definition) {
+    res.status(404).json({
+      error: "definition sync source not found",
+      detail: `未找到上次成功写入的同步快照：${syncSource.sourcePath || "未记录"}。请先执行一次“确认写入”，再使用 Sync DSL。`,
+    });
+    return;
+  }
+
+  res.json({
+    ok: true,
+    sourceKind: syncSource.sourceKind,
+    source: syncSource.source,
+    resolvedProjectPath: syncSource.resolvedProjectPath,
+    sourcePath: syncSource.sourcePath,
+    snapshotPath: syncSource.snapshotPath,
+    definitionPath: syncSource.definitionPath,
+    definition: syncSource.definition,
+    selectedPipelineId: syncSource.definition.selectedPipelineId,
+    pipelineCount: syncSource.definition.pipelines?.length || (syncSource.definition.pipeline ? 1 : 0),
+    lastWrittenAt: syncSource.lastWrittenAt,
+    currentExists: !!currentDefinition,
+    currentMatches: currentDefinition ? JSON.stringify(currentDefinition) === JSON.stringify(syncSource.definition) : false,
+  });
+});
+
+app.post("/api/definition/sync", (req, res) => {
+  const pipeline = normalizePipeline(req.body?.pipeline);
+  if (!pipeline) {
+    res.status(400).json({ error: "pipeline is required" });
+    return;
+  }
+
+  const currentDefinition = readDefinition();
+  const syncSource = resolveDefinitionSyncSource(pipeline, currentDefinition);
+  if (!syncSource.definition) {
+    res.status(404).json({
+      error: "definition sync source not found",
+      detail: `未找到上次成功写入的同步快照：${syncSource.sourcePath || "未记录"}。请先执行一次“确认写入”，再使用 Sync DSL。`,
+    });
+    return;
+  }
+
+  const definitionPath = writeDefinition(syncSource.definition);
+  res.json({
+    ok: true,
+    sourceKind: syncSource.sourceKind,
+    source: syncSource.source,
+    resolvedProjectPath: syncSource.resolvedProjectPath,
+    definitionPath,
+    sourcePath: syncSource.sourcePath,
+    snapshotPath: syncSource.snapshotPath,
+    lastWrittenAt: syncSource.lastWrittenAt,
+    definition: syncSource.definition,
   });
 });
 
@@ -186,6 +256,7 @@ app.post("/api/compile/apply", (req, res) => {
   }
 
   const written = writeArtifacts(plan.artifacts);
+  persistDefinitionSyncRecord(plan, written, "compile-apply");
   res.json({
     ok: true,
     pipelineId: plan.pipelineId,
@@ -304,6 +375,111 @@ const server = http.createServer(app);
 server.listen(PORT, () => {
   console.log(`AgentFlow orchestrator listening on http://localhost:${PORT}`);
 });
+
+function resolveDefinitionSyncSource(pipeline, currentDefinition = null) {
+  const projectPath = pipeline?.projectPath || ".";
+  const resolvedProjectPath = resolveProjectPath(projectPath, getPaths().projectRoot);
+  const record = getDefinitionSyncRecord(pipeline?.id);
+  const snapshotPath = record?.snapshotPath || record?.sourcePath || "";
+  const definition = snapshotPath ? readDefinitionFile(snapshotPath) : null;
+  if (definition) {
+    return {
+      sourceKind: "last-written-snapshot",
+      source: record?.source || "compile-apply",
+      projectPath: record?.projectPath || projectPath,
+      resolvedProjectPath: record?.resolvedProjectPath || resolvedProjectPath,
+      sourcePath: snapshotPath,
+      snapshotPath,
+      definitionPath: record?.definitionPath || getPaths().definitionPath,
+      lastWrittenAt: record?.updatedAt || null,
+      definition,
+    };
+  }
+
+  const legacySnapshotPath = path.join(resolvedProjectPath, ".agentflow", "compiled", "definition.snapshot.json");
+  const legacySnapshot = readDefinitionFile(legacySnapshotPath);
+  if (legacySnapshot) {
+    return {
+      sourceKind: "legacy-snapshot",
+      source: "system-snapshot",
+      projectPath,
+      resolvedProjectPath,
+      sourcePath: legacySnapshotPath,
+      snapshotPath: legacySnapshotPath,
+      definitionPath: getPaths().definitionPath,
+      lastWrittenAt: null,
+      definition: legacySnapshot,
+    };
+  }
+
+  const compiledLeaderPath = path.join(resolvedProjectPath, ".agentflow", "compiled", "leader.md");
+  const compiledLeaderDefinition = readDefinitionFromCompiledLeader(compiledLeaderPath);
+  if (compiledLeaderDefinition) {
+    return {
+      sourceKind: "compiled-leader",
+      source: "compiled-leader",
+      projectPath,
+      resolvedProjectPath,
+      sourcePath: compiledLeaderPath,
+      snapshotPath: compiledLeaderPath,
+      definitionPath: getPaths().definitionPath,
+      lastWrittenAt: null,
+      definition: compiledLeaderDefinition,
+    };
+  }
+
+  return {
+    sourceKind: "last-written-snapshot",
+    source: record?.source || "compile-apply",
+    projectPath,
+    resolvedProjectPath,
+    sourcePath: snapshotPath || compiledLeaderPath,
+    snapshotPath: snapshotPath || legacySnapshotPath || compiledLeaderPath,
+    definitionPath: record?.definitionPath || getPaths().definitionPath,
+    lastWrittenAt: record?.updatedAt || null,
+    definition: null,
+  };
+}
+
+function readDefinitionFromCompiledLeader(filePath) {
+  if (!filePath || !fs.existsSync(filePath)) return null;
+
+  const content = fs.readFileSync(filePath, "utf8");
+  const match = content.match(/Structured pipeline definition:\s*```json\s*([\s\S]*?)```/);
+  if (!match?.[1]) return null;
+
+  try {
+    const pipeline = JSON.parse(match[1]);
+    return normalizeDefinitionRequest(
+      {
+        pipeline,
+        pipelines: [pipeline],
+        selectedPipelineId: pipeline.id,
+      },
+      null
+    );
+  } catch {
+    return null;
+  }
+}
+
+function persistDefinitionSyncRecord(plan, written, source) {
+  const pipelineId = plan?.pipelineId;
+  const pipeline = plan?.definition?.pipeline;
+  const snapshotArtifact = written.find((artifact) => artifact.type === "compiled-definition-snapshot");
+  if (!pipelineId || !pipeline || !snapshotArtifact?.path) return null;
+
+  return writeDefinitionSyncRecord(pipelineId, {
+    source,
+    sourceKind: "last-written-snapshot",
+    snapshotPath: snapshotArtifact.path,
+    sourcePath: snapshotArtifact.path,
+    projectPath: pipeline.projectPath || ".",
+    resolvedProjectPath: resolveProjectPath(pipeline.projectPath, getPaths().projectRoot),
+    definitionPath: getPaths().definitionPath,
+    updatedAt: new Date().toISOString(),
+  });
+}
 
 function buildPreflightChecks(pipeline) {
   const claudeDir = getClaudeDir(pipeline.claudeDir);

@@ -9,8 +9,10 @@ const ORCHESTRATOR_ROOT = path.resolve(path.dirname(STORAGE_FILE), "..");
 
 export const PROJECT_ROOT = path.resolve(ORCHESTRATOR_ROOT, "..");
 export const DEFINITION_PATH = path.join(PROJECT_ROOT, "configs", "agentflow.pipeline.json");
+export const DEFINITION_SYNC_STATE_PATH = path.join(PROJECT_ROOT, "configs", "agentflow.definition-sync.json");
 export const HOME_DIR = os.homedir();
 export const DEFAULT_CLAUDE_DIR = path.join(HOME_DIR, ".claude");
+export const SYSTEM_DEFINITION_SNAPSHOT_RELATIVE_PATH = path.join(".agentflow", "compiled", "definition.snapshot.json");
 
 export function getPaths(options = {}) {
   const claudeDir = getClaudeDir(options.claudeDir);
@@ -26,9 +28,17 @@ export function getPaths(options = {}) {
 }
 
 export function readDefinition() {
-  if (!fs.existsSync(DEFINITION_PATH)) return null;
-  const definition = JSON.parse(fs.readFileSync(DEFINITION_PATH, "utf8"));
-  return normalizeStoredDefinition(definition);
+  return readNormalizedDefinitionFile(DEFINITION_PATH);
+}
+
+export function readSystemDefinitionSnapshot(projectPath, baseDir = PROJECT_ROOT) {
+  const snapshotPath = getSystemDefinitionSnapshotPath(projectPath, baseDir);
+  return readNormalizedDefinitionFile(snapshotPath);
+}
+
+export function getSystemDefinitionSnapshotPath(projectPath, baseDir = PROJECT_ROOT) {
+  const resolvedProjectPath = resolveProjectPath(projectPath, baseDir);
+  return path.join(resolvedProjectPath, SYSTEM_DEFINITION_SNAPSHOT_RELATIVE_PATH);
 }
 
 export function withCurrentContent(artifacts) {
@@ -53,6 +63,51 @@ export function writeArtifacts(artifacts) {
     path: artifact.path,
     changed: artifact.changed,
   }));
+}
+
+export function writeDefinition(definition) {
+  fs.mkdirSync(path.dirname(DEFINITION_PATH), { recursive: true });
+  fs.writeFileSync(DEFINITION_PATH, `${JSON.stringify(definition, null, 2)}\n`);
+  return DEFINITION_PATH;
+}
+
+export function readDefinitionSyncState() {
+  if (!fs.existsSync(DEFINITION_SYNC_STATE_PATH)) return { pipelines: {} };
+  try {
+    const payload = JSON.parse(fs.readFileSync(DEFINITION_SYNC_STATE_PATH, "utf8"));
+    return payload && typeof payload === "object" && payload.pipelines && typeof payload.pipelines === "object"
+      ? payload
+      : { pipelines: {} };
+  } catch {
+    return { pipelines: {} };
+  }
+}
+
+export function writeDefinitionSyncRecord(pipelineId, record) {
+  const state = readDefinitionSyncState();
+  state.pipelines = state.pipelines || {};
+  state.pipelines[pipelineId] = {
+    ...(state.pipelines[pipelineId] || {}),
+    ...record,
+  };
+  fs.mkdirSync(path.dirname(DEFINITION_SYNC_STATE_PATH), { recursive: true });
+  fs.writeFileSync(DEFINITION_SYNC_STATE_PATH, `${JSON.stringify(state, null, 2)}\n`);
+  return state.pipelines[pipelineId];
+}
+
+export function getDefinitionSyncRecord(pipelineId) {
+  const state = readDefinitionSyncState();
+  return state.pipelines?.[pipelineId] || null;
+}
+
+export function readDefinitionFile(filePath) {
+  return readNormalizedDefinitionFile(filePath);
+}
+
+function readNormalizedDefinitionFile(filePath) {
+  if (!filePath || !fs.existsSync(filePath)) return null;
+  const definition = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  return normalizeStoredDefinition(definition);
 }
 
 export function listClaudeAgents(options = {}) {

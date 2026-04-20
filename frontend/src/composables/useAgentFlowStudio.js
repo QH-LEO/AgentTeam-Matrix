@@ -178,6 +178,7 @@ export function useAgentFlowStudio() {
   const runStarting = ref(false);
   const compiling = ref(false);
   const applyingCompile = ref(false);
+  const syncingDefinition = ref(false);
   const launchingITerm = ref(false);
   const currentRun = ref(null);
   const launchStatus = ref("等待填写需求");
@@ -901,6 +902,70 @@ export function useAgentFlowStudio() {
     }
   }
 
+  async function syncDefinitionFromSystem() {
+    if (!selectedPipeline.value) {
+      lastAction.value = "请先选择流水线";
+      return null;
+    }
+
+    syncingDefinition.value = true;
+    try {
+      const preview = await apiPost("/api/definition/sync-preview", {
+        pipeline: clonePayload(selectedPipeline.value),
+      });
+      const pipelineCount = preview.pipelineCount || 0;
+      const snapshotPath = preview.snapshotPath || preview.sourcePath || "未记录";
+      const sourceIntro = preview.sourceKind === "compiled-leader"
+        ? "将从实际配置路径下的 compiled leader 结构化定义反向同步 DSL 文件。"
+        : "将从系统已写入的定义快照反向同步 DSL 文件。";
+      const confirmMessage = [
+        sourceIntro,
+        `同步来源：${preview.source || "compile-apply"}`,
+        `实际配置路径：${preview.resolvedProjectPath || selectedPipeline.value.projectPath || "当前工程目录"}`,
+        `${preview.sourceKind === "compiled-leader" ? "恢复来源文件" : "实际写入快照"}：${snapshotPath}`,
+        `DSL 文件：${preview.definitionPath}`,
+        `流水线数量：${pipelineCount}`,
+        preview.lastWrittenAt ? `最近写入时间：${preview.lastWrittenAt}` : "最近写入时间：未记录",
+        preview.currentExists
+          ? preview.currentMatches
+            ? "当前 DSL 与系统快照一致，但仍可强制回写。"
+            : "当前 DSL 将被系统快照覆盖。"
+          : "当前 DSL 文件不存在，将按系统快照重建。",
+        "",
+        "确定继续吗？",
+      ].join("\n");
+
+      if (!confirmDelete(confirmMessage)) {
+        lastAction.value = "已取消 Sync DSL";
+        return null;
+      }
+
+      const payload = await apiPost("/api/definition/sync", {
+        pipeline: clonePayload(selectedPipeline.value),
+      });
+      const syncedPipelines = Array.isArray(payload.definition?.pipelines)
+        ? payload.definition.pipelines
+        : payload.definition?.pipeline
+          ? [payload.definition.pipeline]
+          : [];
+      if (syncedPipelines.length) {
+        state.pipelines = normalizePipelines(syncedPipelines);
+        state.selectedPipelineId = payload.definition?.selectedPipelineId || syncedPipelines[0]?.id || "";
+        const selected = state.pipelines.find((pipeline) => pipeline.id === state.selectedPipelineId) || state.pipelines[0] || null;
+        syncFocusForPipeline(state, selected);
+      }
+      compilePreview.value = null;
+      lintResult.value = null;
+      lastAction.value = `已从${payload.sourceKind === "compiled-leader" ? "compiled leader" : "系统快照"}同步 DSL：${payload.snapshotPath || payload.sourcePath || payload.definitionPath}`;
+      return payload;
+    } catch (error) {
+      lastAction.value = error.message;
+      throw error;
+    } finally {
+      syncingDefinition.value = false;
+    }
+  }
+
   async function startRun() {
     if (!selectedPipeline.value) {
       runError.value = "请先创建或选择流水线";
@@ -1058,6 +1123,7 @@ export function useAgentFlowStudio() {
     runStarting,
     compiling,
     applyingCompile,
+    syncingDefinition,
     launchingITerm,
     currentRun,
     launchStatus,
@@ -1122,6 +1188,7 @@ export function useAgentFlowStudio() {
     togglePreflightPanel,
     previewCompile,
     applyCompile,
+    syncDefinitionFromSystem,
     startRun,
     refreshLaunchPreview,
     openInITerm,
