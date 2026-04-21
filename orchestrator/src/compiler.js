@@ -628,6 +628,252 @@ function renderKnowledgeWikiAssetList(pipeline) {
   ].join("\n");
 }
 
+function resolveWikiPath(pipeline, projectRoot) {
+  return resolveConfiguredPath(pipeline.knowledgeBase?.path || ".agentflow/wiki", {
+    fallback: ".agentflow/wiki",
+    baseDir: projectRoot,
+  });
+}
+
+function renderKnowledgeWikiSchema(pipeline) {
+  const kb = pipeline.knowledgeBase;
+  const stageTags = pipeline.stages.map((stage) => slugifyForTag(stage.name)).filter(Boolean);
+  return `# AgentFlow Knowledge Wiki Schema
+
+## Domain
+${kb.domain}
+
+This wiki tracks reusable project knowledge created while running the AgentFlow pipeline "${pipeline.name}".
+
+## Conventions
+
+- File names use lowercase kebab-case.
+- Every wiki page starts with YAML frontmatter.
+- Every page should link to related pages with [[wikilinks]] when possible.
+- Every new or updated page must be listed in index.md.
+- Every wiki action must append to log.md.
+- Raw sources under raw/ are immutable${kb.rawImmutable ? " and must not be edited after capture" : " unless the user explicitly allows changes"}.
+- Contradictions must preserve both claims with dates and sources instead of silently overwriting history.
+- If an update would touch more than 10 wiki pages, propose the scope before writing.
+
+## Page Types
+
+- requirement: product scope, user stories, acceptance criteria, constraints
+- design: architecture plans, API contracts, data flow, implementation sequencing
+- decision: ADRs, irreversible choices, rejected options
+- review: review findings, verification notes, retrospectives
+- entity: systems, modules, services, roles, dependencies
+- concept: domain terms, design principles, protocols
+- comparison: competing options, framework choices, trade-offs
+- query: substantial answers worth preserving
+
+## Frontmatter
+
+\`\`\`yaml
+---
+title: Page Title
+created: YYYY-MM-DD
+updated: YYYY-MM-DD
+type: requirement | design | decision | review | entity | concept | comparison | query
+tags: [from taxonomy below]
+sources: [raw/path/source.md]
+---
+\`\`\`
+
+## Tag Taxonomy
+
+- product: requirement, user-story, acceptance, scope
+- architecture: adr, interface, dependency, constraint
+- engineering: implementation, testing, refactor, migration
+- operations: release, incident, observability, security
+- workflow: stage, agent, skill, delegation
+${stageTags.length ? `- stages: ${stageTags.join(", ")}` : "- stages: stage"}
+
+## Update Policy
+
+- Create a page when a topic is central to the current task or appears in multiple sources.
+- Update an existing page when new information changes, clarifies, or contradicts previous content.
+- Keep raw source references in \`sources\`; do not cite chat memory as a source if a durable artifact exists.
+- Keep pages scannable. Split pages that exceed roughly 200 lines.
+- Use queries/ for durable syntheses that would be expensive to re-derive later.
+`;
+}
+
+function renderKnowledgeWikiIndex(pipeline) {
+  return `# Knowledge Wiki Index
+
+> Content catalog for "${pipeline.name}". Every durable wiki page should be listed here with a one-line summary.
+> Last updated: YYYY-MM-DD | Total pages: 0
+
+## Requirements
+
+## Designs
+
+## Decisions
+
+## Reviews
+
+## Entities
+
+## Concepts
+
+## Comparisons
+
+## Queries
+`;
+}
+
+function renderKnowledgeWikiLog(pipeline) {
+  return `# Knowledge Wiki Log
+
+> Append-only record for "${pipeline.name}" knowledge actions.
+> Format: \`## [YYYY-MM-DD] action | subject\`
+> Actions: init, ingest, update, query, propose, archive, lint
+
+## [YYYY-MM-DD] init | Knowledge Wiki initialized
+
+- Pipeline: ${pipeline.name}
+- Domain: ${pipeline.knowledgeBase.domain}
+- Write mode: ${pipeline.knowledgeBase.writeMode}
+`;
+}
+
+function renderKnowledgeWikiPolicy(pipeline) {
+  return `# ${pipeline.name} Knowledge Wiki Policy
+
+- Enabled: ${pipeline.knowledgeBase.enabled ? "yes" : "no"}
+- Path: ${pipeline.knowledgeBase.path}
+- Domain: ${pipeline.knowledgeBase.domain}
+- Auto orient: ${pipeline.knowledgeBase.autoOrient ? "yes" : "no"}
+- Write mode: ${pipeline.knowledgeBase.writeMode}
+- Raw immutable: ${pipeline.knowledgeBase.rawImmutable ? "yes" : "no"}
+
+## Operating Model
+
+The Knowledge Wiki is the durable project memory for this AgentFlow pipeline. It should capture useful requirements, designs, decisions, reviews, entities, concepts, comparisons, and reusable query answers.
+
+## Write Mode
+
+${renderKnowledgeWriteModePolicy(pipeline.knowledgeBase.writeMode)}
+
+## Stage Output Mapping
+
+${renderKnowledgeStageMapping(pipeline)}
+`;
+}
+
+function renderKnowledgeWikiIngestPrompt(pipeline) {
+  return `# Knowledge Wiki Ingest Prompt
+
+Use this prompt when a stage artifact or external source should be folded into the AgentFlow Knowledge Wiki.
+
+1. Read ${pipeline.knowledgeBase.path}/SCHEMA.md.
+2. Read ${pipeline.knowledgeBase.path}/index.md.
+3. Read recent entries in ${pipeline.knowledgeBase.path}/log.md.
+4. Capture any new raw source under the appropriate raw/ directory.
+5. Search existing wiki pages before creating new pages.
+6. Create or update requirement, design, decision, review, entity, concept, comparison, or query pages.
+7. Use YAML frontmatter and [[wikilinks]].
+8. Update index.md and append log.md.
+9. Report touched files and any contradictions or follow-up questions.
+
+Write mode: ${pipeline.knowledgeBase.writeMode}
+${renderKnowledgeWriteModePolicy(pipeline.knowledgeBase.writeMode)}
+`;
+}
+
+function renderKnowledgeWikiQueryPrompt(pipeline) {
+  return `# Knowledge Wiki Query Prompt
+
+Use this prompt when answering questions from the durable Knowledge Wiki.
+
+1. Read ${pipeline.knowledgeBase.path}/SCHEMA.md.
+2. Read ${pipeline.knowledgeBase.path}/index.md.
+3. Search the wiki for relevant terms if the index is insufficient.
+4. Read the relevant pages before answering.
+5. Cite wiki pages by path or [[wikilink]].
+6. If the answer is a substantial synthesis, propose filing it under queries/ or comparisons/.
+
+Do not modify wiki files when writeMode is readonly.
+`;
+}
+
+function renderUsingAgentFlowWikiSkill(pipeline) {
+  return `---
+name: using-agentflow-wiki
+description: Maintain the AgentFlow Knowledge Wiki for project memory, source-backed decisions, and reusable stage context.
+---
+
+# Using AgentFlow Wiki
+
+You are maintaining the Knowledge Wiki for the AgentFlow pipeline "${pipeline.name}".
+
+Wiki path: ${pipeline.knowledgeBase.path}
+Domain: ${pipeline.knowledgeBase.domain}
+Write mode: ${pipeline.knowledgeBase.writeMode}
+
+## Orientation
+
+Before ingesting, querying, or updating the wiki:
+
+1. Read ${pipeline.knowledgeBase.path}/SCHEMA.md.
+2. Read ${pipeline.knowledgeBase.path}/index.md.
+3. Read recent entries in ${pipeline.knowledgeBase.path}/log.md.
+
+## Ingest
+
+- Preserve raw sources under raw/.
+- Search existing pages before creating new ones.
+- Update pages only when the information is durable and useful for future runs.
+- Use frontmatter, tags from SCHEMA.md, and [[wikilinks]].
+- Update index.md and log.md whenever you write wiki pages.
+- If more than 10 pages would change, propose the update scope first.
+
+## Query
+
+- Answer from the compiled wiki first, then inspect raw sources if needed.
+- Cite the wiki pages used.
+- Propose filing valuable syntheses under queries/ or comparisons/.
+
+## Write Mode
+
+${renderKnowledgeWriteModePolicy(pipeline.knowledgeBase.writeMode)}
+
+## Stage Mapping
+
+${renderKnowledgeStageMapping(pipeline)}
+`;
+}
+
+function renderKnowledgeWriteModePolicy(writeMode) {
+  if (writeMode === "readonly") {
+    return "Readonly: use the wiki for context only. Do not write files unless the user explicitly overrides readonly mode.";
+  }
+  if (writeMode === "auto_write") {
+    return "Auto write: update the wiki during execution when the value is clear, then report touched files and evidence.";
+  }
+  return "Proposal first: propose wiki updates at useful boundaries and wait for explicit user approval before writing.";
+}
+
+function renderKnowledgeStageMapping(pipeline) {
+  return pipeline.stages.length
+    ? pipeline.stages
+        .map((stage) => {
+          const outputs = [...new Set(stage.actions.flatMap((action) => action.outputs || []))];
+          return `- ${stage.name}: ${outputs.join(", ") || "stage artifacts"}`;
+        })
+        .join("\n")
+    : "- No stages configured.";
+}
+
+function slugifyForTag(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "";
+}
+
 function renderLaunchPrompt(pipeline, requirement, launchMode, resolvedProjectPath) {
   const leaderAgentName = pipeline.leaderAgentName || toLeaderAgentName(pipeline.name);
   const agents = pipeline.stages
@@ -666,10 +912,14 @@ ${agents}
 
 Leader execution requirements after handoff:
 1. 先加载并遵守 using-agentflow 规则。
-2. 先判断任务复杂度，再选择 self / subagent / parallel subagents / agent team。
-3. 委托时必须使用完整 @agent 名称。
-4. 门禁是阻断式控制，命中 block 级别门禁后必须先发起 GATE_PENDING，并按门禁放行方式等待批准、审查或检查结果。
-5. 输出阶段状态、产物、风险和下一步。
+2. 如果 Knowledge Wiki 已启用，先读取 wiki schema/index/log 进行项目知识定位。
+3. 先判断任务复杂度，再选择 self / subagent / parallel subagents / agent team。
+4. 委托时必须使用完整 @agent 名称。
+5. 门禁是阻断式控制，命中 block 级别门禁后必须先发起 GATE_PENDING，并按门禁放行方式等待批准、审查或检查结果。
+6. 输出阶段状态、产物、风险、下一步，以及 Knowledge Wiki 更新建议。
+
+Knowledge Wiki:
+${renderUsingAgentFlowKnowledgeInstructions(pipeline)}
 
 递归委托协议：
 ${renderRecursiveDelegationBrief(pipeline)}
@@ -1303,12 +1553,24 @@ function buildLaunchCommand(pipeline, prompt, leaderAgentName, runId, resolvedPr
 
 function buildManifest(definition) {
   const pipeline = definition.pipeline;
+  const knowledgeAssets = pipeline.knowledgeBase?.enabled
+    ? [
+        `${pipeline.knowledgeBase.path}/SCHEMA.md`,
+        `${pipeline.knowledgeBase.path}/index.md`,
+        `${pipeline.knowledgeBase.path}/log.md`,
+        ".agentflow/compiled/wiki-policy.md",
+        ".agentflow/compiled/wiki-ingest.prompt.md",
+        ".agentflow/compiled/wiki-query.prompt.md",
+        ".claude/skills/using-agentflow-wiki/SKILL.md",
+      ]
+    : [];
   return {
     version: 1,
     schemaVersion: definition.version,
     pipelineId: pipeline.id,
     pipelineName: pipeline.name,
     leaderAgentName: pipeline.leaderAgentName,
+    knowledgeBase: pipeline.knowledgeBase,
     launchModes: ["single-leader", "suggest-team", "force-team"],
     assets: [
       ".agentflow/compiled/definition.snapshot.json",
@@ -1319,6 +1581,7 @@ function buildManifest(definition) {
       ".agentflow/compiled/gates.json",
       ".agentflow/compiled/launch-prompt.md",
       ".claude/skills/using-agentflow/SKILL.md",
+      ...knowledgeAssets,
     ],
   };
 }

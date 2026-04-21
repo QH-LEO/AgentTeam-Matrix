@@ -1223,6 +1223,10 @@ button {
   grid-column: span 4;
 }
 
+.knowledge-card {
+  grid-column: span 4;
+}
+
 .workspace-body-wide .approval-card {
   grid-column: span 4;
 }
@@ -1309,6 +1313,17 @@ button {
 .rules-card textarea {
   min-height: 72px;
   resize: vertical;
+}
+
+.knowledge-card textarea {
+  min-height: 72px;
+  resize: vertical;
+}
+
+.knowledge-toggles {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
 }
 
 .rules-grid {
@@ -2204,6 +2219,10 @@ textarea:focus {
   }
 
   .rules-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .knowledge-toggles {
     grid-template-columns: 1fr;
   }
 

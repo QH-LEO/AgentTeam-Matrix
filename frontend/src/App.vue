@@ -136,6 +136,8 @@ function updateLaunchMode(mode) {
               :selected-pipeline="studio.selectedPipeline"
               @set-policy-value="studio.setPolicyValue"
               @toggle-policy-flag="studio.togglePolicyFlag"
+              @set-knowledge-base-field="studio.setKnowledgeBaseField"
+              @toggle-knowledge-base-flag="studio.toggleKnowledgeBaseFlag"
             />
 
             <GateEditor

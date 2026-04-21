@@ -19,7 +19,7 @@ defineEmits(["preview-compile", "apply-compile", "sync-definition", "run-lint", 
   <div class="panel-section compile-section">
     <div class="section-heading">
       <p>编译预览</p>
-      <span>预览将写入的 Leader、using-agentflow、SOP、manifest 和启动 Prompt。</span>
+      <span>预览将写入的 Leader、using-agentflow、SOP、Knowledge Wiki、manifest 和启动 Prompt。</span>
     </div>
 
     <div class="compile-actions">

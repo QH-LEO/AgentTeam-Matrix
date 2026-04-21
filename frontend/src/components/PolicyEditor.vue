@@ -3,7 +3,7 @@ defineProps({
   selectedPipeline: { type: Object, default: null },
 });
 
-defineEmits(["set-policy-value", "toggle-policy-flag"]);
+defineEmits(["set-policy-value", "toggle-policy-flag", "set-knowledge-base-field", "toggle-knowledge-base-flag"]);
 </script>
 
 <template>
@@ -77,8 +77,66 @@ defineEmits(["set-policy-value", "toggle-policy-flag"]);
         >
           允许子 Agent 再拆任务
         </button>
-        <div class="toolbar-status compact">
-          子 Agent 只能申请继续拆分，不能自行创建 Team；Team 仍只由 Leader 管理。
+      </div>
+
+      <div class="toolbar-group policy-card knowledge-card">
+        <div class="section-heading tight">
+          <p>Knowledge Wiki</p>
+          <span>让流水线沉淀项目长期上下文，暂不接入门禁。</span>
+        </div>
+        <button
+          :class="['policy-toggle', { active: selectedPipeline.knowledgeBase.enabled }]"
+          type="button"
+          @click="$emit('toggle-knowledge-base-flag', 'enabled')"
+        >
+          启用项目知识库
+        </button>
+        <div class="policy-grid">
+          <label>
+            <span>Wiki 路径</span>
+            <input
+              :value="selectedPipeline.knowledgeBase.path"
+              type="text"
+              placeholder=".agentflow/wiki"
+              @input="$emit('set-knowledge-base-field', 'path', $event.target.value)"
+            />
+          </label>
+          <label>
+            <span>写入模式</span>
+            <select
+              :value="selectedPipeline.knowledgeBase.writeMode"
+              @change="$emit('set-knowledge-base-field', 'writeMode', $event.target.value)"
+            >
+              <option value="proposal_first">先提议再写</option>
+              <option value="readonly">只读查询</option>
+              <option value="auto_write">自动写入</option>
+            </select>
+          </label>
+        </div>
+        <label>
+          <span>知识域说明</span>
+          <textarea
+            :value="selectedPipeline.knowledgeBase.domain"
+            rows="2"
+            placeholder="这个项目的需求、方案、决策和复盘知识库"
+            @input="$emit('set-knowledge-base-field', 'domain', $event.target.value)"
+          ></textarea>
+        </label>
+        <div class="knowledge-toggles">
+          <button
+            :class="['policy-toggle', { active: selectedPipeline.knowledgeBase.autoOrient }]"
+            type="button"
+            @click="$emit('toggle-knowledge-base-flag', 'autoOrient')"
+          >
+            运行前读取 Wiki
+          </button>
+          <button
+            :class="['policy-toggle', { active: selectedPipeline.knowledgeBase.rawImmutable }]"
+            type="button"
+            @click="$emit('toggle-knowledge-base-flag', 'rawImmutable')"
+          >
+            原始资料防覆盖
+          </button>
         </div>
       </div>
 

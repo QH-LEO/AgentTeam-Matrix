@@ -30,6 +30,15 @@ const defaultDelegationPolicy = {
   },
 };
 
+const defaultKnowledgeBase = {
+  enabled: true,
+  path: ".agentflow/wiki",
+  domain: "AgentFlow 项目研发知识库",
+  autoOrient: true,
+  writeMode: "proposal_first",
+  rawImmutable: true,
+};
+
 const defaultQualityGates = [
   {
     id: "requirement-review",
@@ -98,6 +107,7 @@ const defaultPipelines = [
     claudeDir: DEFAULT_CLAUDE_DIR,
     sharedAgentsDir: defaultSharedAgentsDir(DEFAULT_CLAUDE_DIR),
     delegationPolicy: clonePayload(defaultDelegationPolicy),
+    knowledgeBase: clonePayload(defaultKnowledgeBase),
     qualityGates: clonePayload(defaultQualityGates),
     stages: [
       {
@@ -863,6 +873,20 @@ export function useAgentFlowStudio() {
     selectedPipeline.value.delegationPolicy[key] = !selectedPipeline.value.delegationPolicy[key];
   }
 
+  function setKnowledgeBaseField(key, value) {
+    if (!selectedPipeline.value) return;
+    selectedPipeline.value.knowledgeBase[key] = typeof value === "boolean" ? value : String(value ?? "");
+    syncDerivedPipeline(selectedPipeline.value);
+    lastAction.value = "已更新 Knowledge Wiki";
+  }
+
+  function toggleKnowledgeBaseFlag(key) {
+    if (!selectedPipeline.value) return;
+    selectedPipeline.value.knowledgeBase[key] = !selectedPipeline.value.knowledgeBase[key];
+    syncDerivedPipeline(selectedPipeline.value);
+    lastAction.value = "已更新 Knowledge Wiki";
+  }
+
   function setCsvList(target, key, value) {
     target[key] = csvToList(value);
     if (selectedPipeline.value) syncDerivedPipeline(selectedPipeline.value);
@@ -1240,6 +1264,8 @@ export function useAgentFlowStudio() {
     resetDemoData,
     setPolicyValue,
     togglePolicyFlag,
+    setKnowledgeBaseField,
+    toggleKnowledgeBaseFlag,
     setCsvList,
     csvValue,
     runLint,
@@ -1343,6 +1369,7 @@ function normalizePipeline(pipeline) {
     claudeDir: pipeline.claudeDir || DEFAULT_CLAUDE_DIR,
     sharedAgentsDir: pipeline.sharedAgentsDir || defaultSharedAgentsDir(pipeline.claudeDir || DEFAULT_CLAUDE_DIR),
     delegationPolicy: normalizePolicy(pipeline.delegationPolicy),
+    knowledgeBase: normalizeKnowledgeBase(pipeline.knowledgeBase, pipeline.name),
     qualityGates: normalizeQualityGates(pipeline.qualityGates, pipeline.delegationPolicy),
     stages: (pipeline.stages || []).map((stage, index) => normalizeStage(stage, index, pipeline.stages || [])),
   };
@@ -1486,6 +1513,24 @@ function normalizePolicy(policy) {
   merged.maxParallelAgents = Number(merged.maxParallelAgents || 1);
   merged.requireHumanApprovalFor = [];
   return merged;
+}
+
+function normalizeKnowledgeBase(knowledgeBase = {}, pipelineName = "") {
+  const allowedWriteModes = new Set(["proposal_first", "auto_write", "readonly"]);
+  const writeMode = allowedWriteModes.has(knowledgeBase.writeMode)
+    ? knowledgeBase.writeMode
+    : defaultKnowledgeBase.writeMode;
+
+  return {
+    ...clonePayload(defaultKnowledgeBase),
+    ...knowledgeBase,
+    enabled: knowledgeBase.enabled !== false,
+    path: knowledgeBase.path || defaultKnowledgeBase.path,
+    domain: knowledgeBase.domain || `${pipelineName || "AgentFlow"} 项目研发知识库`,
+    autoOrient: knowledgeBase.autoOrient !== false,
+    writeMode,
+    rawImmutable: knowledgeBase.rawImmutable !== false,
+  };
 }
 
 function normalizeQualityGates(gates, policy = {}) {
