@@ -14,6 +14,8 @@ function iconPath(icon) {
       return "M6 6h4v4H6V6Zm8 0h4a2 2 0 0 1 2 2v1M6 14h4v4H6v-4Zm8 0h4v4h-4v-4ZM10 8h4m-2 2v4";
     case "decision":
       return "M12 3v4m0 10v4M5 8l3 3-3 3-3-3 3-3Zm14 0 3 3-3 3-3-3 3-3ZM9 11h6m-3-4c2.5 0 4 1.6 4 4s-1.5 4-4 4-4-1.6-4-4 1.5-4 4-4Z";
+    case "gate":
+      return "M12 3 20 7v5c0 4.5-3.2 7.7-8 9-4.8-1.3-8-4.5-8-9V7l8-4Zm-3 9 2 2 4-5";
     case "bot":
       return "M9 5h6m-5 0V3m4 2V3m-7 4h10a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2Zm3 6h.01M14 13h.01";
     case "spark":

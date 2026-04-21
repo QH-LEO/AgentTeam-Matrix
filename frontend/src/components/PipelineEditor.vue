@@ -31,7 +31,12 @@ defineEmits([
   "delete-action",
   "move-action",
   "set-csv-list",
+  "toggle-action-gate",
 ]);
+
+function gateSummary(action) {
+  return action.gates?.length ? action.gates.join(", ") : "未绑定门禁";
+}
 </script>
 
 <template>
@@ -293,12 +298,30 @@ defineEmits([
         </label>
         <label>
           <span>Gates</span>
-          <input
-            :value="csvValue(action.gates)"
-            type="text"
-            placeholder="requirement-review, architecture-review"
-            @input="$emit('set-csv-list', action, 'gates', $event.target.value)"
-          />
+          <details class="gate-dropdown">
+            <summary>
+              <span>{{ gateSummary(action) }}</span>
+              <small>{{ selectedPipeline.qualityGates.length }} 个可选门禁</small>
+            </summary>
+            <div v-if="selectedPipeline.qualityGates.length" class="gate-option-list">
+              <label
+                v-for="gate in selectedPipeline.qualityGates"
+                :key="gate.id"
+                :class="['gate-option', { active: action.gates?.includes(gate.id) }]"
+              >
+                <input
+                  type="checkbox"
+                  :checked="action.gates?.includes(gate.id)"
+                  @change="$emit('toggle-action-gate', action, gate.id)"
+                />
+                <span>
+                  <strong>{{ gate.name || gate.id }}</strong>
+                  <small>{{ gate.id }} · {{ gate.trigger }} · {{ gate.executor }} · {{ gate.enforcement }}</small>
+                </span>
+              </label>
+            </div>
+            <div v-else class="gate-option-empty">暂无门禁，请先到“门禁管理”添加。</div>
+          </details>
         </label>
       </article>
       <button class="ghost-button" type="button" @click="$emit('add-action', focusedStage)">添加 Action</button>

@@ -270,6 +270,79 @@ button {
   font-size: 12px;
 }
 
+.gate-dropdown {
+  position: relative;
+  border: 1px solid var(--line-soft);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.gate-dropdown summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 44px;
+  padding: 10px 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.gate-dropdown summary::-webkit-details-marker {
+  display: none;
+}
+
+.gate-dropdown summary span {
+  color: #eaf6ff;
+  overflow-wrap: anywhere;
+}
+
+.gate-dropdown summary small {
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.gate-option-list {
+  display: grid;
+  gap: 8px;
+  padding: 0 10px 10px;
+}
+
+.gate-option {
+  display: grid !important;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 10px !important;
+  padding: 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.58);
+}
+
+.gate-option.active {
+  border-color: rgba(52, 211, 153, 0.42);
+  background: rgba(52, 211, 153, 0.1);
+}
+
+.gate-option span {
+  display: grid;
+  gap: 3px;
+}
+
+.gate-option strong {
+  color: #f8fbff;
+}
+
+.gate-option small,
+.gate-option-empty {
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.gate-option-empty {
+  padding: 0 12px 12px;
+}
+
 .compile-section {
   min-width: min(680px, 100%);
 }
@@ -1115,7 +1188,12 @@ button {
   align-items: stretch;
 }
 
-.workspace-body-wide .policy-section {
+.gate-section {
+  align-items: stretch;
+}
+
+.workspace-body-wide .policy-section,
+.workspace-body-wide .gate-section {
   display: grid;
   grid-template-columns: repeat(12, minmax(0, 1fr));
   gap: 16px;
@@ -1246,25 +1324,31 @@ button {
 
 .gate-card-header {
   display: grid;
-  grid-template-columns: minmax(140px, 0.9fr) minmax(160px, 1fr) minmax(120px, 0.7fr) auto auto;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 10px;
   align-items: end;
 }
 
-.gate-required {
-  display: inline-flex !important;
+.gate-usage {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   align-items: center;
-  justify-content: center;
-  min-height: 44px;
-  padding: 0 12px;
-  color: #dbeafe !important;
+  padding-top: 2px;
+}
+
+.gate-usage strong,
+.gate-usage span {
+  padding: 6px 9px;
   border: 1px solid var(--line-soft);
-  border-radius: 14px;
+  border-radius: 999px;
+  color: var(--text-soft);
+  font-size: 12px;
   background: rgba(255, 255, 255, 0.03);
 }
 
-.gate-required input {
-  width: auto;
+.gate-usage strong {
+  color: #dbeafe;
 }
 
 .mini-tag-list {
@@ -2319,7 +2403,8 @@ textarea:focus {
     min-width: 0;
   }
 
-  .workspace-body-wide .policy-section {
+  .workspace-body-wide .policy-section,
+  .workspace-body-wide .gate-section {
     grid-template-columns: 1fr;
   }
 

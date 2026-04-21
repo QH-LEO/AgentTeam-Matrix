@@ -44,17 +44,19 @@ export function getSystemDefinitionSnapshotPath(projectPath, baseDir = PROJECT_R
 export function withCurrentContent(artifacts) {
   return artifacts.map((artifact) => {
     const currentContent = fs.existsSync(artifact.path) ? fs.readFileSync(artifact.path, "utf8") : "";
+    const nextContent = artifact.seedOnly && currentContent ? currentContent : artifact.nextContent;
     return {
       ...artifact,
       currentContent,
-      changed: currentContent !== artifact.nextContent,
+      nextContent,
+      changed: currentContent !== nextContent,
     };
   });
 }
 
 export function writeArtifacts(artifacts) {
   const preview = withCurrentContent(artifacts);
-  for (const artifact of artifacts) {
+  for (const artifact of preview) {
     fs.mkdirSync(path.dirname(artifact.path), { recursive: true });
     fs.writeFileSync(artifact.path, artifact.nextContent);
   }

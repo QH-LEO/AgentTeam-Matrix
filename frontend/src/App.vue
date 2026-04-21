@@ -4,6 +4,7 @@ import SidebarNav from "./components/SidebarNav.vue";
 import StudioHeader from "./components/StudioHeader.vue";
 import PipelineEditor from "./components/PipelineEditor.vue";
 import PolicyEditor from "./components/PolicyEditor.vue";
+import GateEditor from "./components/GateEditor.vue";
 import AgentEditor from "./components/AgentEditor.vue";
 import SkillEditor from "./components/SkillEditor.vue";
 import CompilerPreview from "./components/CompilerPreview.vue";
@@ -127,16 +128,21 @@ function updateLaunchMode(mode) {
               @delete-action="studio.deleteAction"
               @move-action="studio.moveAction"
               @set-csv-list="studio.setCsvList"
+              @toggle-action-gate="studio.toggleActionGate"
             />
 
             <PolicyEditor
               v-else-if="studio.activeMenu === 'policy'"
               :selected-pipeline="studio.selectedPipeline"
-              :approval-options="studio.approvalOptions"
               @set-policy-value="studio.setPolicyValue"
               @toggle-policy-flag="studio.togglePolicyFlag"
-              @toggle-approval="studio.toggleApproval"
+            />
+
+            <GateEditor
+              v-else-if="studio.activeMenu === 'gates'"
+              :selected-pipeline="studio.selectedPipeline"
               @add-quality-gate="studio.addQualityGate"
+              @set-quality-gate-field="studio.setQualityGateField"
               @delete-quality-gate="studio.deleteQualityGate"
             />
 
@@ -172,7 +178,7 @@ function updateLaunchMode(mode) {
             />
 
             <CompilerPreview
-              v-else
+              v-else-if="studio.activeMenu === 'compile'"
               :compile-preview="studio.compilePreview"
               :selected-artifact="studio.selectedArtifact"
               :selected-artifact-index="studio.selectedArtifactIndex"

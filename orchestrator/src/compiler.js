@@ -1,6 +1,6 @@
 import path from "node:path";
 import { normalizeDefinitionRequest, normalizeLaunchMode, normalizePipeline, toLeaderAgentName } from "./schema.js";
-import { resolveProjectPath } from "./storage.js";
+import { resolveConfiguredPath, resolveProjectPath } from "./storage.js";
 
 export function buildCompilePlan(request, existingDefinition, paths) {
   const definition = normalizeDefinitionRequest(request, existingDefinition);
@@ -50,7 +50,6 @@ export function lintDefinition(definition, paths = {}) {
 
   const availableAgentNames = new Set(pipeline.stages.flatMap((stage) => stage.agents.map((agent) => agent.agentName)));
   const definedGateIds = new Set((pipeline.qualityGates || []).map((gate) => gate.id));
-  const approvalGateIds = new Set(pipeline.delegationPolicy?.requireHumanApprovalFor || []);
   for (const stage of pipeline.stages) {
     if (!stage.agents.length) {
       issues.push({
@@ -108,34 +107,14 @@ export function lintDefinition(definition, paths = {}) {
       for (const gateId of action.gates || []) {
         if (definedGateIds.has(gateId)) continue;
 
-        if (approvalGateIds.has(gateId)) {
-          issues.push({
-            id: `action-${action.id}-gate-${gateId}-implicit`,
-            label: `动作：${action.name}`,
-            status: "warn",
-            detail: `Action gate ${gateId} 只在 delegationPolicy 中声明，建议补充 qualityGates 定义，让审批标准更明确。`,
-          });
-          continue;
-        }
-
         issues.push({
           id: `action-${action.id}-gate-${gateId}-missing`,
           label: `动作：${action.name}`,
           status: "fail",
-          detail: `Action gate ${gateId} 未在 qualityGates 或 delegationPolicy 中定义，无法编译为可执行门禁。`,
+          detail: `Action gate ${gateId} 未在 qualityGates 中定义，无法编译为可执行门禁。`,
         });
       }
     }
-  }
-
-  for (const gateId of approvalGateIds) {
-    if (definedGateIds.has(gateId)) continue;
-    issues.push({
-      id: `approval-${gateId}-definition`,
-      label: `人工确认点：${gateId}`,
-      status: "warn",
-      detail: "该人工确认点只有触发器，没有详细门禁说明，编译会使用通用审批模板。建议补充到 qualityGates。",
-    });
   }
 
   if (pipeline.delegationPolicy.allowRecursiveDelegation && pipeline.delegationPolicy.maxDepth > 2) {
@@ -145,6 +124,25 @@ export function lintDefinition(definition, paths = {}) {
       status: "warn",
       detail: "Claude Code agent teams 当前不支持 nested teams，递归委托会由 Leader 统一调度。",
     });
+  }
+
+  if (pipeline.knowledgeBase?.enabled) {
+    if (!pipeline.knowledgeBase.path) {
+      issues.push({
+        id: "knowledge-base-path",
+        label: "Knowledge Wiki",
+        status: "fail",
+        detail: "Knowledge Wiki 已启用，但缺少 wiki path。",
+      });
+    }
+    if (pipeline.knowledgeBase.writeMode === "auto_write") {
+      issues.push({
+        id: "knowledge-base-auto-write",
+        label: "Knowledge Wiki",
+        status: "warn",
+        detail: "auto_write 会让 Agent 自动更新知识库；MVP 阶段建议使用 proposal_first。",
+      });
+    }
   }
 
   return {
@@ -157,6 +155,7 @@ export function buildArtifacts(definition, paths) {
   const pipeline = definition.pipeline;
   const projectRoot = resolveProjectPath(pipeline.projectPath, paths.projectRoot);
   const leaderAgentName = pipeline.leaderAgentName || toLeaderAgentName(pipeline.name);
+  const knowledgeArtifacts = buildKnowledgeBaseArtifacts(pipeline, projectRoot);
   const artifacts = [
     {
       type: "definition",
@@ -198,6 +197,7 @@ export function buildArtifacts(definition, paths) {
       path: path.join(projectRoot, ".agentflow", "compiled", "gates.json"),
       nextContent: `${JSON.stringify(buildGatePlan(pipeline), null, 2)}\n`,
     },
+    ...knowledgeArtifacts,
     {
       type: "compiled-launch-prompt",
       path: path.join(projectRoot, ".agentflow", "compiled", "launch-prompt.md"),
@@ -234,6 +234,70 @@ export function buildArtifacts(definition, paths) {
   return artifacts;
 }
 
+function buildKnowledgeBaseArtifacts(pipeline, projectRoot) {
+  if (!pipeline.knowledgeBase?.enabled) return [];
+
+  const wikiRoot = resolveWikiPath(pipeline, projectRoot);
+  const directoryKeepers = [
+    "raw/requirements",
+    "raw/designs",
+    "raw/reviews",
+    "raw/external",
+    "entities",
+    "concepts",
+    "decisions",
+    "comparisons",
+    "queries",
+  ].map((directory) => ({
+    type: "knowledge-wiki-dir",
+    path: path.join(wikiRoot, directory, ".gitkeep"),
+    nextContent: "",
+    seedOnly: true,
+  }));
+
+  return [
+    {
+      type: "knowledge-wiki-schema",
+      path: path.join(wikiRoot, "SCHEMA.md"),
+      nextContent: renderKnowledgeWikiSchema(pipeline),
+      seedOnly: true,
+    },
+    {
+      type: "knowledge-wiki-index",
+      path: path.join(wikiRoot, "index.md"),
+      nextContent: renderKnowledgeWikiIndex(pipeline),
+      seedOnly: true,
+    },
+    {
+      type: "knowledge-wiki-log",
+      path: path.join(wikiRoot, "log.md"),
+      nextContent: renderKnowledgeWikiLog(pipeline),
+      seedOnly: true,
+    },
+    ...directoryKeepers,
+    {
+      type: "compiled-wiki-policy",
+      path: path.join(projectRoot, ".agentflow", "compiled", "wiki-policy.md"),
+      nextContent: renderKnowledgeWikiPolicy(pipeline),
+    },
+    {
+      type: "compiled-wiki-ingest-prompt",
+      path: path.join(projectRoot, ".agentflow", "compiled", "wiki-ingest.prompt.md"),
+      nextContent: renderKnowledgeWikiIngestPrompt(pipeline),
+    },
+    {
+      type: "compiled-wiki-query-prompt",
+      path: path.join(projectRoot, ".agentflow", "compiled", "wiki-query.prompt.md"),
+      nextContent: renderKnowledgeWikiQueryPrompt(pipeline),
+    },
+    {
+      type: "using-agentflow-wiki-skill",
+      path: path.join(projectRoot, ".claude", "skills", "using-agentflow-wiki", "SKILL.md"),
+      nextContent: renderUsingAgentFlowWikiSkill(pipeline),
+    },
+  ];
+}
+
 export function buildLaunchPrompt({
   pipeline: rawPipeline,
   requirement = "",
@@ -265,7 +329,7 @@ export function renderTeamLeaderAgent(pipeline) {
     : "- 暂无配置 Agent，必要时由 Leader 模拟阶段产出。";
   const gateProtocol = renderGateProtocolBulletList();
   const gateMatrix = renderGateMatrix(pipeline);
-  const policyApprovals = renderPolicyApprovalLines(pipeline);
+  const recursiveProtocol = renderRecursiveDelegationProtocol(pipeline);
 
   return `---
 name: ${leaderAgentName}
@@ -284,6 +348,7 @@ Use the AgentFlow compiled assets as your source of truth:
 - Gate plan: .agentflow/compiled/gates.md
 - Machine-readable gate plan: .agentflow/compiled/gates.json
 - Bootstrap skill: .claude/skills/using-agentflow/SKILL.md
+${renderKnowledgeWikiAssetList(pipeline)}
 
 Available roles:
 ${agentLines}
@@ -304,20 +369,20 @@ Execution rules:
 - Claude Code agent teams are experimental and do not support nested teams; recursive delegation must be coordinated by you.
 - If launch mode or user instruction is force-team, create or attach live team context before deep analysis whenever runtime supports it.
 - Never exceed maxDepth or maxParallelAgents. If deeper delegation is needed, ask the user first.
-- Treat all configured gates and human confirmation triggers as blocking controls, not soft reminders.
+- Treat all configured gates with enforcement=block as blocking controls, not soft reminders.
 - Treat each stage boundary as a review gate.
 - Keep decisions, risks, artifacts, and next steps traceable.
 - Do not simulate delegation in force-team mode or after an explicit live leader invocation unless the user explicitly approves fallback.
 - If runtime handoff fails because the team context does not exist, bootstrap the team context first (for example via spawnTeam when available), then retry the same live invocation.
 - Only use simulated delegation when live startup is unavailable and the user has explicitly approved fallback.
-- When delegating to shared agents, include the exact action contract and gate contract in the delegated brief.
+- When delegating to shared agents, include the exact action contract, gate contract, and recursive delegation contract in the delegated brief.
 - Execute using-agentflow, gate handling, and stage orchestration after live handoff/team startup, not as a replacement for it.
+
+Recursive delegation protocol:
+${recursiveProtocol}
 
 Blocking gate protocol:
 ${gateProtocol}
-
-Global approval triggers:
-${policyApprovals}
 
 Gate matrix:
 ${gateMatrix}
@@ -375,8 +440,13 @@ ${renderRoleActionSummary(stage, agent)}
 Blocking gate contract:
 ${renderRoleGateContract(pipeline, stage, agent)}
 
+Recursive delegation contract:
+${renderRoleRecursiveDelegationContract(pipeline, stage, agent)}
+
 Operating rules:
 - Stay within this role unless the Team Leader explicitly asks otherwise.
+- Do not create or attach an independent Agent Team. Only the Team Leader may start or manage a team.
+- Do not create another subagent unless the Team Leader explicitly grants APPROVED_RECURSIVE_DELEGATION for this task.
 - Gates are blocking execution controls, not reminders.
 - Before a gated step, stop and surface the required evidence to the Team Leader.
 - Resume only after the Team Leader gives an explicit APPROVED:<gate-id> style confirmation.
@@ -426,6 +496,7 @@ ${renderDetailedGateDefinitions(pipeline)}
 export function renderDelegationPolicyMarkdown(pipeline) {
   const policy = pipeline.delegationPolicy;
   const leaderAgentName = pipeline.leaderAgentName || toLeaderAgentName(pipeline.name);
+  const recursiveProtocol = renderRecursiveDelegationProtocol(pipeline);
   return `# ${pipeline.name} Delegation Policy
 
 - Default mode: ${policy.defaultMode}
@@ -434,7 +505,6 @@ export function renderDelegationPolicyMarkdown(pipeline) {
 - Allow recursive delegation: ${policy.allowRecursiveDelegation ? "yes" : "no"}
 - Max depth: ${policy.maxDepth}
 - Max parallel agents: ${policy.maxParallelAgents}
-- Human confirmations: ${policy.requireHumanApprovalFor.join(", ") || "none"}
 
 ## Decision Rules
 
@@ -450,9 +520,9 @@ ${policy.escalationRules.team}
 ### Recursive Delegation
 ${policy.escalationRules.recursive}
 
-## Human Approval Triggers
+## Recursive Delegation Protocol
 
-${renderPolicyApprovalLines(pipeline)}
+${recursiveProtocol}
 
 ## Runtime Constraints
 
@@ -465,16 +535,18 @@ ${renderPolicyApprovalLines(pipeline)}
 - Do not perform repository analysis, workflow execution, gate handling, or simulation in the main session before the live handoff attempt.
 - In force-team mode, do not replace live startup with simulated delegation unless the user explicitly approves fallback.
 - If runtime returns a recoverable team-not-found style error, bootstrap the team context first, then retry the same live invocation.
-- Any action-level gate or approval trigger is blocking: request approval, wait, then continue.
+- Any action-level gate with enforcement=block is blocking: request the required executor decision, wait, then continue.
 - Shared agents are read-only references, so the Team Leader must paste the relevant gate contract into delegated prompts.
 `;
 }
 
 export function renderUsingAgentFlowSkill(pipeline) {
   const leaderAgentName = pipeline.leaderAgentName || toLeaderAgentName(pipeline.name);
+  const recursiveProtocol = renderRecursiveDelegationProtocol(pipeline);
+  const knowledgeInstructions = renderUsingAgentFlowKnowledgeInstructions(pipeline);
   return `---
 name: using-agentflow
-description: Use when starting or executing any AgentFlow-managed pipeline. Loads the pipeline SOP, delegation policy, quality gates, and role routing rules before work begins.
+description: Use when starting or executing any AgentFlow-managed pipeline. Loads the pipeline SOP, delegation policy, quality gates, knowledge wiki, and role routing rules before work begins.
 ---
 
 # Using AgentFlow
@@ -486,12 +558,17 @@ Before taking action:
 1. Read the pipeline SOP from .agentflow/compiled/sop.md.
 2. Read the delegation policy from .agentflow/compiled/delegation-policy.md.
 3. Read the gate plan from .agentflow/compiled/gates.md. Use .agentflow/compiled/gates.json when you need structured gate data.
-4. Identify the current stage and required artifacts.
-5. Classify task complexity.
-6. Decide execution mode: self / subagent / parallel subagents / agent team / ask human.
-7. Use full @agent names when delegating.
-8. If a gate applies, emit a GATE_PENDING approval packet before execution and wait for human confirmation.
-9. Record artifacts, risks, decisions, and next steps.
+4. If Knowledge Wiki is enabled, follow the Knowledge Wiki orientation below before stage work.
+5. Identify the current stage and required artifacts.
+6. Classify task complexity.
+7. Decide execution mode: self / subagent / parallel subagents / agent team / ask human.
+8. Use full @agent names when delegating.
+9. If a gate applies, emit a GATE_PENDING packet before execution and wait for the required executor decision.
+10. Record artifacts, risks, decisions, next steps, and any Knowledge Wiki update proposal.
+
+Knowledge Wiki:
+
+${knowledgeInstructions}
 
 Important:
 
@@ -501,7 +578,54 @@ Important:
 - If the request arrived via an explicit live handle such as ${formatLiveAgentHandle(leaderAgentName)}, preserve the handoff-first behavior and do not downgrade to simulation without explicit approval.
 - Gates are blocking controls, not reminders.
 - If the user requirement is unclear, ask before delegating.
+
+Recursive delegation:
+
+${recursiveProtocol}
 `;
+}
+
+function renderUsingAgentFlowKnowledgeInstructions(pipeline) {
+  if (!pipeline.knowledgeBase?.enabled) {
+    return "- Knowledge Wiki is disabled for this pipeline.";
+  }
+
+  const kb = pipeline.knowledgeBase;
+  const wikiPath = kb.path || ".agentflow/wiki";
+  const writeModeRule = {
+    proposal_first: "At stage boundaries, propose wiki updates first. Write only after explicit user approval.",
+    auto_write: "You may update wiki pages during execution, but still summarize touched files and preserve raw sources.",
+    readonly: "Read the wiki for context only. Do not write wiki files unless the user explicitly overrides readonly mode.",
+  }[kb.writeMode] || "At stage boundaries, propose wiki updates first. Write only after explicit user approval.";
+
+  return [
+    `- Wiki path: ${wikiPath}`,
+    `- Domain: ${kb.domain}`,
+    `- Write mode: ${kb.writeMode}`,
+    `- Auto orientation: ${kb.autoOrient ? "enabled" : "disabled"}`,
+    `- Raw sources immutable: ${kb.rawImmutable ? "yes" : "no"}`,
+    "- Before using project knowledge, read:",
+    `  1. ${wikiPath}/SCHEMA.md`,
+    `  2. ${wikiPath}/index.md`,
+    `  3. ${wikiPath}/log.md recent entries`,
+    "- Use .claude/skills/using-agentflow-wiki/SKILL.md for wiki maintenance rules when ingesting, querying, or proposing updates.",
+    `- ${writeModeRule}`,
+    "- Valuable stage outputs should become durable wiki pages: requirements, designs, decisions, reviews, entities, concepts, comparisons, and reusable queries.",
+  ].join("\n");
+}
+
+function renderKnowledgeWikiAssetList(pipeline) {
+  if (!pipeline.knowledgeBase?.enabled) return "";
+  const wikiPath = pipeline.knowledgeBase.path || ".agentflow/wiki";
+  return [
+    `- Knowledge Wiki policy: .agentflow/compiled/wiki-policy.md`,
+    `- Knowledge Wiki ingest prompt: .agentflow/compiled/wiki-ingest.prompt.md`,
+    `- Knowledge Wiki query prompt: .agentflow/compiled/wiki-query.prompt.md`,
+    `- Knowledge Wiki schema: ${wikiPath}/SCHEMA.md`,
+    `- Knowledge Wiki index: ${wikiPath}/index.md`,
+    `- Knowledge Wiki log: ${wikiPath}/log.md`,
+    "- Knowledge Wiki skill: .claude/skills/using-agentflow-wiki/SKILL.md",
+  ].join("\n");
 }
 
 function renderLaunchPrompt(pipeline, requirement, launchMode, resolvedProjectPath) {
@@ -544,11 +668,11 @@ Leader execution requirements after handoff:
 1. 先加载并遵守 using-agentflow 规则。
 2. 先判断任务复杂度，再选择 self / subagent / parallel subagents / agent team。
 3. 委托时必须使用完整 @agent 名称。
-4. 门禁和人工确认点是阻断式控制，命中后必须先发起 GATE_PENDING 再等待批准。
+4. 门禁是阻断式控制，命中 block 级别门禁后必须先发起 GATE_PENDING，并按门禁放行方式等待批准、审查或检查结果。
 5. 输出阶段状态、产物、风险和下一步。
 
-全局人工确认触发器：
-${renderPolicyApprovalLines(pipeline)}
+递归委托协议：
+${renderRecursiveDelegationBrief(pipeline)}
 
 关键门禁矩阵：
 ${renderGateMatrix(pipeline)}
@@ -623,9 +747,6 @@ function renderRunSummary(pipeline, resolvedProjectPath = pipeline.projectPath) 
     "Delegation policy:",
     JSON.stringify(pipeline.delegationPolicy, null, 2),
     "",
-    "Global approvals:",
-    renderPolicyApprovalLines(pipeline),
-    "",
     "Stages:",
     stages || "No stages configured.",
   ].join("\n");
@@ -638,8 +759,9 @@ function buildGatePlan(pipeline) {
     pipelineId: pipeline.id,
     pipelineName: pipeline.name,
     leaderAgentName: pipeline.leaderAgentName || toLeaderAgentName(pipeline.name),
-    globalApprovals: resolveGateDetails(gateMap, pipeline.delegationPolicy.requireHumanApprovalFor),
     qualityGates: resolveGateDetails(gateMap, pipeline.qualityGates.map((gate) => gate.id)),
+    gateExecutors: [...new Set(pipeline.qualityGates.map((gate) => normalizeGateDefinition(gate).executor))],
+    gateTriggers: [...new Set(pipeline.qualityGates.map((gate) => normalizeGateDefinition(gate).trigger))],
     gateProtocol: {
       pendingState: "GATE_PENDING",
       approvedState: "APPROVED",
@@ -695,7 +817,7 @@ function renderGatePlanMarkdown(pipeline) {
         ? role.gates
             .map((gate) => `- ${gate.id} (${gate.name})：${gate.description} | evidence: ${gate.evidenceHints.join("；")}`)
             .join("\n")
-        : "- 当前没有角色专属 stage gate，仍需遵守全局人工确认触发器。";
+        : "- 当前没有角色专属 action gate。";
 
       return `### ${role.stageName} / ${role.roleName} (@${role.agentName})
 
@@ -713,7 +835,7 @@ ${gates}`;
 
 ${renderGateProtocolBulletList()}
 
-Approval request template:
+Gate request template:
 
 \`\`\`text
 GATE_PENDING
@@ -724,12 +846,8 @@ owner: @<agent-name>
 evidence:
 - <artifact or decision>
 - <risk / assumption / validation result>
-decision_needed: approve | reject
+decision_needed: approve | review | revise | reject
 \`\`\`
-
-## Global Approval Triggers
-
-${renderPolicyApprovalLines(pipeline)}
 
 ## Quality Gate Definitions
 
@@ -753,11 +871,133 @@ function renderGateProtocolRules() {
   return [
     "Gates are blocking execution controls, not reminders.",
     "When an action hits a gate, surface GATE_PENDING with gate id, stage, action, owner, evidence, and requested decision.",
-    "Wait for explicit human approval before continuing past the gate.",
-    "If approval is rejected, revise the plan or artifact before re-requesting approval.",
+    "For block gates, wait for the required release decision before continuing past the gate.",
+    "For human_approval or human_review gates, wait for explicit human approval or review.",
+    "For ai_review gates, produce the requested evidence, check it against pass criteria, and ask the human if the result is ambiguous or high risk.",
+    "If the gate is rejected or fails the pass criteria, follow failAction before re-requesting the gate.",
     "If an approved artifact changes materially, mark the gate stale and request approval again.",
     "When delegating to shared agents, paste the relevant gate contract into the delegated brief so the guardrails stay intact.",
   ];
+}
+
+function renderRecursiveDelegationProtocol(pipeline) {
+  const policy = pipeline.delegationPolicy;
+  const enabled = policy.allowRecursiveDelegation;
+  const maxDepth = policy.maxDepth;
+  const maxParallelAgents = policy.maxParallelAgents;
+
+  if (!enabled) {
+    return [
+      "- Status: disabled.",
+      "- Child agents must not create subagents or teams.",
+      "- If a child agent cannot complete its assigned scope, it must return BLOCKED_DELEGATION to the Team Leader with reason, missing input, and suggested next owner.",
+      "- The Team Leader may reassign work, split the task at the top level, or ask the user for clarification.",
+      "- Gates still bubble up to the Team Leader.",
+    ].join("\n");
+  }
+
+  return [
+    "- Status: enabled, but controlled by the Team Leader.",
+    `- Max delegation depth: ${maxDepth}. Depth 1 means Team Leader -> configured role agent; depth 2 means that role agent may request one bounded helper; depth 3 means one additional helper layer only when explicitly approved.`,
+    `- Max parallel agents: ${maxParallelAgents} across the whole run, including recursive helpers.`,
+    "- Only the Team Leader may create or manage an Agent Team. Child agents must never create nested teams or spawnTeam by themselves.",
+    "- Child agents may request recursive delegation, but they must not create subagents until the Team Leader approves the request.",
+    "- The Team Leader must approve recursive delegation only when the subtask has a narrow scope, clear inputs, clear outputs, clear write boundaries, and an owner that can be reviewed.",
+    "- Recursive helpers inherit all relevant action contracts, gate contracts, write restrictions, and gate executors from their parent task.",
+    "- Any gate hit by a recursive helper bubbles up to the parent agent and then to the Team Leader. Helpers must not approve their own gates.",
+    "- Recursive outputs must return to the parent agent first. The parent agent validates and summarizes them before the Team Leader integrates them.",
+    "- If the next delegation would exceed maxDepth or maxParallelAgents, the Team Leader must deny the request or ask the user before continuing.",
+    "",
+    "Child agent request packet:",
+    "",
+    "RECURSIVE_DELEGATION_REQUEST",
+    "from: @<requesting-agent>",
+    "current_depth: <number>",
+    "requested_depth: <number>",
+    "reason: <why this cannot be completed safely by the current agent>",
+    "proposed_subtask: <bounded task>",
+    "inputs:",
+    "- <input artifact or context>",
+    "outputs:",
+    "- <expected artifact>",
+    "write_scope:",
+    "- <files/directories or none>",
+    "gates:",
+    "- <gate-id or none>",
+    "risk: <low | medium | high>",
+    "",
+    "Team Leader approval packet:",
+    "",
+    "APPROVED_RECURSIVE_DELEGATION",
+    "to: @<requesting-agent>",
+    "approved_depth: <number>",
+    "allowed_subtask: <bounded task>",
+    "allowed_write_scope:",
+    "- <files/directories or none>",
+    "required_outputs:",
+    "- <expected artifact>",
+    "required_gates:",
+    "- <gate-id or none>",
+    "stop_condition: <when the helper must stop and report back>",
+  ].join("\n");
+}
+
+function renderRecursiveDelegationBrief(pipeline) {
+  const policy = pipeline.delegationPolicy;
+  if (!policy.allowRecursiveDelegation) {
+    return "递归委托关闭：子 Agent 不能再创建 subagent 或 team；遇到复杂/阻塞任务必须回报 Team Leader。";
+  }
+
+  return [
+    `递归委托开启，但必须由 Team Leader 控制。最大深度 ${policy.maxDepth}，全局最大并行 Agent ${policy.maxParallelAgents}。`,
+    "子 Agent 只能提交 RECURSIVE_DELEGATION_REQUEST，不能自行创建 team，不能绕过 gate。",
+    "只有 Team Leader 发出 APPROVED_RECURSIVE_DELEGATION 后，子 Agent 才能创建受控 helper subagent。",
+    "所有递归 helper 的产物必须先回到父 Agent，再由 Team Leader 汇总。",
+  ].join("\n");
+}
+
+function renderRoleRecursiveDelegationContract(pipeline, stage, agent) {
+  const policy = pipeline.delegationPolicy;
+  const ownedActions = getRoleActions(stage, agent);
+  const gateIds = [...new Set(ownedActions.flatMap((action) => action.gates || []))];
+
+  if (!policy.allowRecursiveDelegation) {
+    return [
+      "- Recursive delegation is disabled for this pipeline.",
+      "- Do not create subagents, helper agents, or teams.",
+      "- If your assigned action becomes too broad or blocked, report BLOCKED_DELEGATION to the Team Leader instead of splitting work yourself.",
+    ].join("\n");
+  }
+
+  return [
+    "- You are normally operating at delegation depth 1 unless the Team Leader explicitly assigns another depth.",
+    `- Pipeline maxDepth is ${policy.maxDepth}; never request or use a depth above that value.`,
+    `- Pipeline maxParallelAgents is ${policy.maxParallelAgents}; ask the Team Leader to account for this before adding helpers.`,
+    "- You may not create or attach an Agent Team. Team orchestration is reserved for the Team Leader.",
+    "- You may not create a helper subagent by yourself. First emit RECURSIVE_DELEGATION_REQUEST and wait for APPROVED_RECURSIVE_DELEGATION.",
+    "- If approved, pass only the approved subtask, approved write scope, required outputs, and required gates to the helper.",
+    "- A helper's output is not final. Review it, summarize it, and return your own consolidated result to the Team Leader.",
+    "- If a helper reaches a gate, stop and bubble it up to the Team Leader.",
+    gateIds.length ? `- Your directly inherited gates are: ${gateIds.join(", ")}.` : "- No direct action gate is assigned to this role.",
+    "",
+    "Use this request format when you need help:",
+    "",
+    "RECURSIVE_DELEGATION_REQUEST",
+    `from: @${agent.agentName}`,
+    "current_depth: 1",
+    "requested_depth: 2",
+    "reason: <why help is needed>",
+    "proposed_subtask: <bounded task>",
+    "inputs:",
+    "- <input artifact or context>",
+    "outputs:",
+    "- <expected artifact>",
+    "write_scope:",
+    "- <files/directories or none>",
+    "gates:",
+    "- <gate-id or none>",
+    "risk: <low | medium | high>",
+  ].join("\n");
 }
 
 function renderGateMatrix(pipeline) {
@@ -770,20 +1010,13 @@ function renderGateMatrix(pipeline) {
   return lines.join("\n") || "- 当前没有 action 级门禁。";
 }
 
-function renderPolicyApprovalLines(pipeline) {
-  const approvals = resolveGateDetails(buildGateMap(pipeline), pipeline.delegationPolicy.requireHumanApprovalFor);
-  return approvals.length
-    ? approvals.map((gate) => `- ${gate.id}（${gate.name}）：${gate.description}`).join("\n")
-    : "- 当前没有额外人工确认触发器。";
-}
-
 function renderDetailedGateDefinitions(pipeline) {
   const gates = resolveGateDetails(buildGateMap(pipeline), pipeline.qualityGates.map((gate) => gate.id));
   return gates.length
     ? gates
         .map(
           (gate) =>
-            `- ${gate.id} (${gate.type}/${gate.required ? "required" : "optional"})：${gate.description}\n  Evidence: ${gate.evidenceHints.join("；")}`
+            `- ${gate.id} (${gate.domain}/${gate.trigger}/${gate.executor}/${gate.enforcement})：${gate.description}\n  Evidence: ${gate.evidenceHints.join("；")}\n  Pass criteria: ${gate.passCriteria}\n  Fail action: ${gate.failAction}`
         )
         .join("\n")
     : "- 当前没有 quality gate 定义。";
@@ -792,7 +1025,7 @@ function renderDetailedGateDefinitions(pipeline) {
 function renderGateReferenceList(pipeline, gateIds = []) {
   const gates = resolveGateDetails(buildGateMap(pipeline), gateIds);
   return gates.length
-    ? gates.map((gate) => `${gate.id}（${gate.name}/${gate.type}/${gate.required ? "required" : "optional"}）`).join(", ")
+    ? gates.map((gate) => `${gate.id}（${gate.name}/${gate.trigger}/${gate.executor}/${gate.enforcement}）`).join(", ")
     : "none";
 }
 
@@ -812,7 +1045,7 @@ function renderRoleGateContract(pipeline, stage, agent) {
   const gateMap = buildGateMap(pipeline);
   const actions = getRoleActions(stage, agent);
   if (!actions.length) {
-    return `- 当前没有直接 owner 到你的 action。\n- 仍需遵守全局人工确认触发器：${renderGateReferenceList(pipeline, pipeline.delegationPolicy.requireHumanApprovalFor)}。`;
+    return "- 当前没有直接 owner 到你的 action。";
   }
 
   return [
@@ -822,10 +1055,10 @@ function renderRoleGateContract(pipeline, stage, agent) {
         ? gates
             .map(
               (gate) =>
-                `- ${gate.id}（${gate.name}）：${gate.description}\n  Evidence: ${gate.evidenceHints.join("；")}`
+                `- ${gate.id}（${gate.name}/${gate.trigger}/${gate.executor}/${gate.enforcement}）：${gate.description}\n  Evidence: ${gate.evidenceHints.join("；")}\n  Pass criteria: ${gate.passCriteria}\n  Fail action: ${gate.failAction}`
             )
             .join("\n")
-        : "- 当前 action 没有直接 stage gate，但仍需遵守全局人工确认触发器。";
+        : "- 当前 action 没有直接 stage gate。";
 
       return `### ${action.name}
 
@@ -835,9 +1068,6 @@ function renderRoleGateContract(pipeline, stage, agent) {
 - Gates:
 ${gateLines}`;
     }),
-    "",
-    "### Global approvals",
-    renderPolicyApprovalLines(pipeline),
   ].join("\n\n");
 }
 
@@ -849,11 +1079,6 @@ function buildGateMap(pipeline) {
   const gateMap = new Map();
   for (const gate of pipeline.qualityGates || []) {
     gateMap.set(gate.id, normalizeGateDefinition(gate));
-  }
-  for (const gateId of pipeline.delegationPolicy.requireHumanApprovalFor || []) {
-    if (!gateMap.has(gateId)) {
-      gateMap.set(gateId, normalizeGateDefinition({ id: gateId }));
-    }
   }
   return gateMap;
 }
@@ -878,16 +1103,45 @@ function normalizeGateDefinition(gate = {}) {
   const id = String(gate.id || fallback.id);
   const name = String(gate.name || fallback.name);
   const type = String(gate.type || fallback.type || "human");
-  const required = gate.required !== false;
+  const executor = normalizeGateExecutor(gate.executor || fallback.executor, type);
+  const domain = String(gate.domain || fallback.domain || inferGateDomain({ id, name, description: gate.description || fallback.description }));
+  const trigger = String(gate.trigger || fallback.trigger || inferGateTrigger({ id, name, description: gate.description || fallback.description }));
+  const enforcement = String(gate.enforcement || fallback.enforcement || (gate.required === false ? "warn" : "block"));
+  const required = gate.required === undefined ? enforcement === "block" : gate.required !== false;
   const description = String(gate.description || fallback.description);
+  const evidenceHints = Array.isArray(gate.evidence) && gate.evidence.length
+    ? gate.evidence.map(String)
+    : inferGateEvidenceHints({ id, name, type, domain, trigger, executor, description });
   return {
     id,
     name,
     type,
+    domain,
+    trigger,
+    executor,
+    enforcement,
     required,
     description,
-    evidenceHints: inferGateEvidenceHints({ id, name, type, description }),
+    evidenceHints,
+    passCriteria: String(gate.passCriteria || fallback.passCriteria || inferGatePassCriteria({ id, name, description })),
+    failAction: String(gate.failAction || fallback.failAction || "revise"),
   };
+}
+
+function normalizeGateExecutor(executor, legacyType = "") {
+  const value = String(executor || "");
+  if (["human_approval", "human_review", "ai_review"].includes(value)) return value;
+  if (["command_check", "ci_check", "policy_check"].includes(value)) return "ai_review";
+
+  switch (legacyType) {
+    case "test":
+    case "review":
+    case "security":
+      return "ai_review";
+    case "human":
+    default:
+      return "human_approval";
+  }
 }
 
 function fallbackGateDefinition(gateId) {
@@ -896,37 +1150,73 @@ function fallbackGateDefinition(gateId) {
       id: "requirement-review",
       name: "需求确认",
       type: "human",
+      domain: "requirement",
+      trigger: "before_stage_exit",
+      executor: "human_approval",
+      enforcement: "block",
       description: "需求边界、验收标准和关键风险必须先确认。",
+      passCriteria: "需求边界、验收标准和关键风险已明确。",
+      failAction: "ask_user",
     },
     "architecture-review": {
       id: "architecture-review",
       name: "方案确认",
       type: "human",
+      domain: "architecture",
+      trigger: "before_stage_exit",
+      executor: "human_approval",
+      enforcement: "block",
       description: "方案、接口契约、技术取舍和验证路径必须先确认。",
+      passCriteria: "架构方案、接口契约和风险处理已确认。",
+      failAction: "revise",
     },
     "write-files": {
       id: "write-files",
       name: "写文件前",
       type: "human",
+      domain: "code",
+      trigger: "before_write",
+      executor: "human_approval",
+      enforcement: "block",
       description: "动手改代码前必须确认文件边界、影响面和回滚路径。",
+      passCriteria: "写入范围、影响面和回滚路径已确认。",
+      failAction: "ask_user",
     },
     "completion-review": {
       id: "completion-review",
       name: "完成验收",
-      type: "human",
+      type: "review",
+      domain: "test",
+      trigger: "after_diff",
+      executor: "human_review",
+      enforcement: "block",
       description: "交付完成后必须回顾产物、验证结果和剩余风险。",
+      passCriteria: "交付内容、验证结果和剩余风险已通过验收。",
+      failAction: "revise",
     },
     "destructive-command": {
       id: "destructive-command",
       name: "破坏性命令",
-      type: "human",
+      type: "security",
+      domain: "security",
+      trigger: "before_command",
+      executor: "human_approval",
+      enforcement: "block",
       description: "删除、重置、迁移或其他不可逆操作必须先确认。",
+      passCriteria: "破坏性操作的必要性、影响面和回滚方案已确认。",
+      failAction: "stop",
     },
     deployment: {
       id: "deployment",
       name: "发布前确认",
       type: "human",
+      domain: "release",
+      trigger: "before_pr",
+      executor: "human_approval",
+      enforcement: "block",
       description: "上线前必须确认发布范围、验证方式和回滚方案。",
+      passCriteria: "发布范围、验证清单和回滚方案已确认。",
+      failAction: "stop",
     },
   };
 
@@ -934,12 +1224,18 @@ function fallbackGateDefinition(gateId) {
     id: String(gateId || "gate"),
     name: String(gateId || "未命名门禁"),
     type: "human",
+    domain: inferGateDomain({ id: gateId }),
+    trigger: inferGateTrigger({ id: gateId }),
+    executor: "human_approval",
+    enforcement: "block",
     description: "该门禁未提供详细说明，请至少提交范围、风险、验证结果和待确认决策。",
+    passCriteria: inferGatePassCriteria({ id: gateId }),
+    failAction: "revise",
   };
 }
 
 function inferGateEvidenceHints(gate) {
-  const text = `${gate.id} ${gate.name} ${gate.description}`;
+  const text = `${gate.id} ${gate.name} ${gate.domain} ${gate.trigger} ${gate.executor} ${gate.description}`;
   if (/需求|requirement/i.test(text)) {
     return ["需求摘要与范围边界", "验收标准", "关键风险与待确认问题"];
   }
@@ -959,6 +1255,38 @@ function inferGateEvidenceHints(gate) {
     return ["发布范围", "验证清单", "回滚方案与影响窗口"];
   }
   return ["当前决策摘要", "风险与假设", "验证结果或计划"];
+}
+
+function inferGateDomain(gate) {
+  const text = `${gate.id || ""} ${gate.name || ""} ${gate.description || ""}`;
+  if (/需求|requirement|prd/i.test(text)) return "requirement";
+  if (/方案|架构|architecture|design|api/i.test(text)) return "architecture";
+  if (/依赖|dependency|package|lockfile|npm|pnpm|yarn/i.test(text)) return "dependency";
+  if (/安全|密钥|secret|token|权限|security|destructive|delete|reset|migration|破坏/i.test(text)) return "security";
+  if (/发布|上线|deployment|release|pr/i.test(text)) return "release";
+  if (/测试|验收|test|lint|build|completion|review/i.test(text)) return "test";
+  if (/写文件|write|code|实现/i.test(text)) return "code";
+  return "code";
+}
+
+function inferGateTrigger(gate) {
+  const text = `${gate.id || ""} ${gate.name || ""} ${gate.description || ""}`;
+  if (/写文件|write/i.test(text)) return "before_write";
+  if (/命令|command|bash|destructive|delete|reset|migration|破坏/i.test(text)) return "before_command";
+  if (/发布|上线|deployment|release|pr/i.test(text)) return "before_pr";
+  if (/完成|验收|review|completion|diff/i.test(text)) return "after_diff";
+  return "before_stage_exit";
+}
+
+function inferGatePassCriteria(gate) {
+  const text = `${gate.id || ""} ${gate.name || ""} ${gate.description || ""}`;
+  if (/需求|requirement/i.test(text)) return "需求边界、验收标准和关键风险已明确。";
+  if (/方案|架构|architecture|design|api/i.test(text)) return "方案、接口契约、技术取舍和验证路径已确认。";
+  if (/写文件|write|code|实现/i.test(text)) return "文件边界、影响面和验证方式已确认。";
+  if (/完成|验收|completion|review/i.test(text)) return "交付产物、验证结果和剩余风险已通过审查。";
+  if (/破坏|destructive|delete|reset|migration/i.test(text)) return "操作必要性、影响面、备份与回滚方案已确认。";
+  if (/发布|上线|deployment|release/i.test(text)) return "发布范围、验证清单和回滚方案已确认。";
+  return "证据充分，风险可接受，下一步动作清楚。";
 }
 
 function buildLaunchCommand(pipeline, prompt, leaderAgentName, runId, resolvedProjectPath) {

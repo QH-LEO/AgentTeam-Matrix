@@ -1,10 +1,9 @@
 <script setup>
 defineProps({
   selectedPipeline: { type: Object, default: null },
-  approvalOptions: { type: Array, required: true },
 });
 
-defineEmits(["set-policy-value", "toggle-policy-flag", "toggle-approval", "add-quality-gate", "delete-quality-gate"]);
+defineEmits(["set-policy-value", "toggle-policy-flag"]);
 </script>
 
 <template>
@@ -30,7 +29,7 @@ defineEmits(["set-policy-value", "toggle-policy-flag", "toggle-approval", "add-q
         </select>
         <div class="policy-grid">
           <label>
-            <span>最大递归深度</span>
+            <span>最大委托深度</span>
             <input
               :value="selectedPipeline.delegationPolicy.maxDepth"
               type="number"
@@ -76,28 +75,10 @@ defineEmits(["set-policy-value", "toggle-policy-flag", "toggle-approval", "add-q
           type="button"
           @click="$emit('toggle-policy-flag', 'allowRecursiveDelegation')"
         >
-          允许递归委托
+          允许子 Agent 再拆任务
         </button>
-      </div>
-
-      <div class="toolbar-group policy-card approval-card">
-        <div class="section-heading tight">
-          <p>人工确认点</p>
-          <span>这些动作必须回到人类确认。</span>
-        </div>
-        <div class="approval-list">
-          <button
-            v-for="approval in approvalOptions"
-            :key="approval.key"
-            :class="[
-              'approval-chip',
-              { active: selectedPipeline.delegationPolicy.requireHumanApprovalFor.includes(approval.key) },
-            ]"
-            type="button"
-            @click="$emit('toggle-approval', approval.key)"
-          >
-            {{ approval.label }}
-          </button>
+        <div class="toolbar-status compact">
+          子 Agent 只能申请继续拆分，不能自行创建 Team；Team 仍只由 Leader 管理。
         </div>
       </div>
 
@@ -120,52 +101,13 @@ defineEmits(["set-policy-value", "toggle-policy-flag", "toggle-approval", "add-q
             <textarea v-model="selectedPipeline.delegationPolicy.escalationRules.team" rows="2"></textarea>
           </label>
           <label>
-            <span>递归委托</span>
+            <span>子 Agent 再拆任务</span>
             <textarea v-model="selectedPipeline.delegationPolicy.escalationRules.recursive" rows="2"></textarea>
           </label>
         </div>
       </div>
 
-      <div class="toolbar-group policy-card gates-card">
-        <div class="section-heading tight">
-          <p>质量门禁</p>
-          <span>独立于升级规则，用于阶段确认、写文件、完成验收等强制检查。</span>
-        </div>
-        <div class="gate-list">
-          <article v-for="gate in selectedPipeline.qualityGates" :key="gate.id" class="gate-card">
-            <div class="gate-card-header">
-              <label>
-                <span>Gate ID</span>
-                <input v-model="gate.id" type="text" />
-              </label>
-              <label>
-                <span>名称</span>
-                <input v-model="gate.name" type="text" />
-              </label>
-              <label>
-                <span>类型</span>
-                <select v-model="gate.type">
-                  <option value="human">human</option>
-                  <option value="test">test</option>
-                  <option value="review">review</option>
-                  <option value="security">security</option>
-                </select>
-              </label>
-              <label class="gate-required">
-                <input v-model="gate.required" type="checkbox" />
-                <span>必需</span>
-              </label>
-              <button class="ghost-button compact danger-button" type="button" @click="$emit('delete-quality-gate', gate)">
-                删除
-              </button>
-            </div>
-            <textarea v-model="gate.description" rows="2" placeholder="门禁说明"></textarea>
-          </article>
-        </div>
-        <button class="ghost-button" type="button" @click="$emit('add-quality-gate')">添加门禁</button>
-      </div>
-
-      <div class="toolbar-status">策略模型、升级规则和质量门禁会随编译写入 Team Leader 与 using-agentflow</div>
+      <div class="toolbar-status">策略模型和升级规则会随编译写入 Team Leader 与 using-agentflow；质量门禁请在“门禁管理”中维护。</div>
     </template>
   </div>
 </template>
