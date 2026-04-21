@@ -337,6 +337,7 @@ export function renderTeamLeaderAgent(pipeline) {
   const gateMatrix = renderGateMatrix(pipeline);
   const recursiveProtocol = renderRecursiveDelegationProtocol(pipeline);
   const teamLifecycleRules = renderTeamLifecycleRules("compiled");
+  const handoffRoutingProtocol = renderLiveHandoffRoutingProtocol(leaderAgentName);
 
   return `---
 name: ${leaderAgentName}
@@ -385,6 +386,9 @@ Execution rules:
 - When delegating to shared agents, include the exact action contract, gate contract, and recursive delegation contract in the delegated brief.
 - Execute using-agentflow, gate handling, and stage orchestration after live handoff/team startup, not as a replacement for it.
 
+Live handoff routing protocol:
+${handoffRoutingProtocol}
+
 Team lifecycle rules:
 ${teamLifecycleRules}
 
@@ -410,6 +414,7 @@ evidence:
 - <artifact or decision>
 - <risk / assumption / validation result>
 decision_needed: approve | reject
+reply_route: current live agent runtime id, not role name
 \`\`\`
 `;
 }
@@ -513,6 +518,7 @@ export function renderDelegationPolicyMarkdown(pipeline) {
   const leaderAgentName = pipeline.leaderAgentName || toLeaderAgentName(pipeline.name);
   const recursiveProtocol = renderRecursiveDelegationProtocol(pipeline);
   const teamLifecycleRules = renderTeamLifecycleRules("compiled");
+  const handoffRoutingProtocol = renderLiveHandoffRoutingProtocol(leaderAgentName);
   return `# ${pipeline.name} Delegation Policy
 
 - Default mode: ${policy.defaultMode}
@@ -557,6 +563,10 @@ ${recursiveProtocol}
 - Any action-level gate with enforcement=block is blocking: request the required executor decision, wait, then continue.
 - Shared agents are read-only references, so the Team Leader must paste the relevant gate contract into delegated prompts.
 
+## Live Handoff Routing Protocol
+
+${handoffRoutingProtocol}
+
 ## Team Lifecycle Rules
 
 ${teamLifecycleRules}
@@ -568,6 +578,7 @@ export function renderUsingAgentFlowSkill(pipeline) {
   const recursiveProtocol = renderRecursiveDelegationProtocol(pipeline);
   const knowledgeInstructions = renderUsingAgentFlowKnowledgeInstructions(pipeline);
   const teamLifecycleRules = renderTeamLifecycleRules("compiled");
+  const handoffRoutingProtocol = renderLiveHandoffRoutingProtocol(leaderAgentName);
   return `---
 name: using-agentflow
 description: Use when starting or executing any AgentFlow-managed pipeline. Loads the pipeline SOP, delegation policy, quality gates, knowledge wiki, and role routing rules before work begins.
@@ -605,6 +616,10 @@ Important:
 - In force-team mode, use a fresh run-scoped team whenever possible; do not silently reuse stale teams.
 - Gates are blocking controls, not reminders.
 - If the user requirement is unclear, ask before delegating.
+
+Live handoff routing:
+
+${handoffRoutingProtocol}
 
 Team lifecycle:
 
@@ -913,6 +928,7 @@ function renderLaunchPrompt(pipeline, requirement, launchMode, resolvedProjectPa
   const liveHandle = formatLiveAgentHandle(leaderAgentName);
   const modeInstruction = buildModeInstruction(launchMode, pipeline);
   const teamLifecycleRules = renderTeamLifecycleRules(launchMode, pipeline, runId, resolvedProjectPath);
+  const handoffRoutingProtocol = renderLiveHandoffRoutingProtocol(leaderAgentName);
 
   return `${liveHandle} ${buildInvocationDirective(launchMode)}
 
@@ -927,7 +943,10 @@ Main session handoff rules:
 5. 如果 single-leader/suggest-team 模式出现 team-not-found、leadSessionId、cwd 或 inbox 相关错误，把它视为旧 team 路由污染，退回普通 live leader handoff，不要自动 spawnTeam。
 6. 如果本轮是 force-team，严禁用主会话模拟 delegation 替代 live team；只有用户明确同意 fallback 才能降级。
 7. using-agentflow、阶段判断、gate、team orchestration 必须由 handoff 成功后的 leader agent 执行，而不是由主会话预先执行。
-8. 你的第一段非空输出必须是实际的 handoff 动作或 handoff 尝试结果，不要先输出分析说明。
+8. handoff 成功后，必须记录 runtime 返回的精确 agentId/taskId/output path；后续 gate approve/reject、状态追问、继续执行都必须发给这个精确 agentId/taskId，不要再用 ${liveHandle} 或 agent 名称路由。
+9. 如果 runtime 提示该 agent 没有 active task 或已 completed/stopped，必须用同一个 agentId/taskId 从 transcript 恢复后再发送用户的 gate 回复；不要假装已经转交。
+10. 只有 agentId/taskId 路由返回 accepted/resumed/completed 等明确结果后，才能告诉用户“已转交”。
+11. 你的第一段非空输出必须是实际的 handoff 动作或 handoff 尝试结果，不要先输出分析说明。
 
 Invoked leader context:
 - AgentFlow pipeline: ${pipeline.name}
@@ -938,6 +957,9 @@ ${resolvedProjectPath}
 
 启动模式：
 ${launchMode}
+
+Live handoff routing:
+${handoffRoutingProtocol}
 
 Team lifecycle:
 ${teamLifecycleRules}
@@ -1030,6 +1052,7 @@ function renderTeamLifecycleRules(launchMode, pipeline = {}, runId = "", resolve
       "- If verification is impossible or mismatched, create a fresh run-scoped team instead of attaching stale team context.",
       "- The live leader must ensure replies are visible in the current main session, not only written to team-lead inbox.",
       "- If a teammate reply lands in team-lead inbox but is not visible in the current chat, treat the team context as stale and report/recreate the team.",
+      "- Gate replies must still be routed through the current live leader runtime id, even when a team exists.",
     ].filter(Boolean).join("\n");
   }
 
@@ -1041,6 +1064,7 @@ function renderTeamLifecycleRules(launchMode, pipeline = {}, runId = "", resolve
       "- Evaluate whether team is needed after handoff; if needed, explain why and ask the current main session for approval.",
       `- If approved, create a fresh run-scoped team such as: ${teamName}.`,
       "- If runtime surfaces team-not-found, leadSessionId, cwd, or inbox errors before approval, treat that as stale team routing and retry plain live leader handoff.",
+      "- Gate replies must be sent to the captured live leader runtime id, not the role handle.",
     ].join("\n");
   }
 
@@ -1051,6 +1075,7 @@ function renderTeamLifecycleRules(launchMode, pipeline = {}, runId = "", resolve
       "- Do not use team inbox, team-lead.json, or old team context.",
       "- The invoked leader must reply directly in the current main session.",
       "- If runtime surfaces team-not-found, leadSessionId, cwd, or inbox errors, treat that as stale team routing and retry plain live leader handoff.",
+      "- Gate replies must be sent to the captured live leader runtime id, not the role handle.",
     ].join("\n");
   }
 
@@ -1060,6 +1085,7 @@ function renderTeamLifecycleRules(launchMode, pipeline = {}, runId = "", resolve
     "- Prefer fresh run-scoped teams over long-lived reusable teams.",
     "- Never silently reuse a team whose leadSessionId, cwd, or inbox subscription may point at an old session.",
     "- In single-leader/suggest-team startup, the leader must reply directly to the current main session, not only to team-lead inbox.",
+    "- After handoff, route gate replies by runtime agentId/taskId instead of role name.",
   ].join("\n");
 }
 
@@ -1079,6 +1105,20 @@ function safeAsciiSlug(value) {
 
 function formatLiveAgentHandle(agentName) {
   return `@"${agentName} (agent)"`;
+}
+
+function renderLiveHandoffRoutingProtocol(leaderAgentName) {
+  const liveHandle = formatLiveAgentHandle(leaderAgentName);
+  return [
+    `- Use ${liveHandle} only for the first live handoff invocation.`,
+    "- Immediately after handoff, capture and retain the runtime agentId/taskId/output path returned by the agent runtime.",
+    "- Treat that runtime id as the reply route for this run. Store it with the pending gate state.",
+    "- For every later user response such as approve, reject, continue, status, or a gate answer, send the message to the exact runtime agentId/taskId, not to the role name or live handle.",
+    "- If the runtime says the agent has no active task, was stopped, or completed, resume the same runtime agentId/taskId from transcript and then deliver the user's exact gate response.",
+    "- Do not tell the user that a gate approval was delivered until the runtime confirms the exact runtime id accepted/resumed the message.",
+    "- When a GATE_PENDING packet is shown to the user, include the gate id, requested decision, and the current runtime id if the main session has it.",
+    "- If routing by role name and routing by runtime id disagree, trust the runtime id.",
+  ].join("\n");
 }
 
 function effectiveAgentSkills(pipeline, agent) {
@@ -1221,6 +1261,7 @@ Gate request template:
 \`\`\`text
 GATE_PENDING
 gate_id: <gate-id>
+gate_name: <gate-name>
 stage: <stage-name>
 action: <action-name>
 owner: @<agent-name>
@@ -1228,6 +1269,7 @@ evidence:
 - <artifact or decision>
 - <risk / assumption / validation result>
 decision_needed: approve | review | revise | reject
+reply_route: current live agent runtime id, not role name
 \`\`\`
 
 ## Quality Gate Definitions

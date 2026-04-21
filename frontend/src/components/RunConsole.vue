@@ -67,6 +67,7 @@ defineEmits([
           launch prompt 的首行会显式调用
           <code>@"{{ currentRun?.pipeline?.leaderAgentName }} (agent)"</code>，
           由主会话先做 live handoff，而不是直接把会话伪装成 leader。
+          handoff 成功后，后续 approve/reject 必须发给 runtime 返回的精确 agentId/taskId，不能再按角色名重发。
         </p>
         <div class="launch-command-preview">
           <span>项目目录</span>
