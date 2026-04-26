@@ -2,7 +2,6 @@ import { computed, onMounted, reactive, ref, toRefs, watch } from "vue";
 import { apiGet, apiPost, clonePayload } from "../lib/api.js";
 
 const DEFAULT_PROJECT_PATH = ".";
-const EMPTY_PROJECT_PATH = "";
 const DEFAULT_CLAUDE_DIR = "~/.claude";
 
 const menuItems = [
@@ -103,7 +102,6 @@ const defaultPipelines = [
     id: "p1",
     name: "核心研发流程",
     leaderAgentName: "agentflow-core-rd-team-leader",
-    projectPath: DEFAULT_PROJECT_PATH,
     claudeDir: DEFAULT_CLAUDE_DIR,
     sharedAgentsDir: defaultSharedAgentsDir(DEFAULT_CLAUDE_DIR),
     delegationPolicy: clonePayload(defaultDelegationPolicy),
@@ -182,7 +180,6 @@ export function useAgentFlowStudio() {
     forms: {
       pipelineName: "",
       leaderAgentName: "",
-      projectPath: EMPTY_PROJECT_PATH,
       claudeDir: DEFAULT_CLAUDE_DIR,
       sharedAgentsDir: defaultSharedAgentsDir(DEFAULT_CLAUDE_DIR),
       stageName: "",
@@ -330,7 +327,6 @@ export function useAgentFlowStudio() {
     selectedPipeline,
     (pipeline) => {
       syncFocusForPipeline(state, pipeline);
-      state.forms.projectPath = projectPathFieldValue(pipeline?.projectPath);
       state.forms.claudeDir = pipeline?.claudeDir || DEFAULT_CLAUDE_DIR;
       state.forms.sharedAgentsDir = pipeline?.sharedAgentsDir || defaultSharedAgentsDir(pipeline?.claudeDir || DEFAULT_CLAUDE_DIR);
     },
@@ -378,7 +374,6 @@ export function useAgentFlowStudio() {
       id: pipelineId,
       name,
       leaderAgentName: state.forms.leaderAgentName.trim() || toLeaderAgentName(name, pipelineId),
-      projectPath: state.forms.projectPath.trim() || DEFAULT_PROJECT_PATH,
       claudeDir: state.forms.claudeDir.trim() || DEFAULT_CLAUDE_DIR,
       sharedAgentsDir: state.forms.sharedAgentsDir.trim() || defaultSharedAgentsDir(state.forms.claudeDir.trim() || DEFAULT_CLAUDE_DIR),
       delegationPolicy: clonePayload(defaultDelegationPolicy),
@@ -392,7 +387,6 @@ export function useAgentFlowStudio() {
     state.focusedAgentId = "";
     state.forms.pipelineName = "";
     state.forms.leaderAgentName = "";
-    state.forms.projectPath = projectPathFieldValue(pipeline.projectPath);
     state.forms.claudeDir = pipeline.claudeDir;
     state.forms.sharedAgentsDir = pipeline.sharedAgentsDir;
     state.forms.stageName = "";
@@ -413,7 +407,6 @@ export function useAgentFlowStudio() {
     if (!state.pipelines.length) {
       state.selectedPipelineId = "";
       syncFocusForPipeline(state, null);
-      state.forms.projectPath = EMPTY_PROJECT_PATH;
       state.forms.claudeDir = DEFAULT_CLAUDE_DIR;
       state.forms.sharedAgentsDir = defaultSharedAgentsDir(DEFAULT_CLAUDE_DIR);
       lastAction.value = `已删除流水线：${pipeline.name}`;
@@ -747,9 +740,7 @@ export function useAgentFlowStudio() {
         selectedPipeline.value.sharedAgentsDir = defaultSharedAgentsDir(value || DEFAULT_CLAUDE_DIR);
       }
     }
-    if (key === "projectPath") {
-      selectedPipeline.value[key] = value;
-    } else if (key === "claudeDir") {
+    if (key === "claudeDir") {
       selectedPipeline.value[key] = value;
     } else if (key === "sharedAgentsDir") {
       selectedPipeline.value[key] = value;
@@ -949,7 +940,6 @@ export function useAgentFlowStudio() {
       const selected = state.pipelines.find((pipeline) => pipeline.id === selectedId) || state.pipelines[0];
       state.selectedPipelineId = selected?.id || "";
       syncFocusForPipeline(state, selected);
-      state.forms.projectPath = projectPathFieldValue(selected?.projectPath);
       lastAction.value = `已加载 ${state.pipelines.length} 条 DSL v3 流水线定义`;
     } catch {
       lastAction.value = "未连接 orchestrator，使用浏览器本地配置";
@@ -1037,12 +1027,12 @@ export function useAgentFlowStudio() {
       const pipelineCount = preview.pipelineCount || 0;
       const snapshotPath = preview.snapshotPath || preview.sourcePath || "未记录";
       const sourceIntro = preview.sourceKind === "compiled-leader"
-        ? "将从实际配置路径下的 compiled leader 结构化定义反向同步 DSL 文件。"
-        : "将从系统已写入的定义快照反向同步 DSL 文件。";
+        ? "将从全局 compiled leader 结构化定义反向同步 DSL 文件。"
+        : "将从全局已写入的定义快照反向同步 DSL 文件。";
       const confirmMessage = [
         sourceIntro,
         `同步来源：${preview.source || "compile-apply"}`,
-        `实际配置路径：${preview.resolvedProjectPath || selectedPipeline.value.projectPath || "当前工程目录"}`,
+        `全局安装路径：${preview.resolvedProjectPath || "~/.agentflow"}`,
         `${preview.sourceKind === "compiled-leader" ? "恢复来源文件" : "实际写入快照"}：${snapshotPath}`,
         `DSL 文件：${preview.definitionPath}`,
         `流水线数量：${pipelineCount}`,
@@ -1144,7 +1134,7 @@ export function useAgentFlowStudio() {
         launchMode: launchMode.value,
       });
       currentRun.value = { ...payload, preflight: currentRun.value?.preflight, compile: currentRun.value?.compile };
-      launchStatus.value = "已打开 iTerm2，Claude 已在项目目录启动";
+      launchStatus.value = "已打开 iTerm2，Claude 已通过全局 AgentFlow 启动";
     } catch (error) {
       launchStatus.value = error.message;
     } finally {
@@ -1679,8 +1669,6 @@ function pipelineFieldLabel(key) {
       return "流水线名称";
     case "leaderAgentName":
       return "Team Leader 名称";
-    case "projectPath":
-      return "项目地址";
     case "claudeDir":
       return "Claude 目录";
     case "sharedAgentsDir":
@@ -1692,10 +1680,6 @@ function pipelineFieldLabel(key) {
 
 function defaultSharedAgentsDir(claudeDir) {
   return `${String(claudeDir || DEFAULT_CLAUDE_DIR).replace(/\/+$/, "")}/agents`;
-}
-
-function projectPathFieldValue(value) {
-  return value && value !== DEFAULT_PROJECT_PATH ? value : EMPTY_PROJECT_PATH;
 }
 
 function inferWatchForStage(pipeline, stage) {

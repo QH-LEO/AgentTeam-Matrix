@@ -1,6 +1,6 @@
 import path from "node:path";
 import { normalizeDefinitionRequest, normalizeLaunchMode, normalizePipeline, toLeaderAgentName } from "./schema.js";
-import { resolveConfiguredPath, resolveProjectPath } from "./storage.js";
+import { resolveConfiguredPath } from "./storage.js";
 
 export function buildCompilePlan(request, existingDefinition, paths) {
   const definition = normalizeDefinitionRequest(request, existingDefinition);
@@ -28,15 +28,6 @@ export function lintDefinition(definition, paths = {}) {
       detail: "缺少当前流水线，无法编译。",
     });
     return { ok: false, issues };
-  }
-
-  if (!pipeline.projectPath) {
-    issues.push({
-      id: "project-path-required",
-      label: "项目地址",
-      status: "fail",
-      detail: "缺少 projectPath，无法写入项目级 AgentFlow 资产。",
-    });
   }
 
   if (!pipeline.stages.length) {
@@ -153,9 +144,14 @@ export function lintDefinition(definition, paths = {}) {
 
 export function buildArtifacts(definition, paths) {
   const pipeline = definition.pipeline;
-  const projectRoot = resolveProjectPath(pipeline.projectPath, paths.projectRoot);
   const leaderAgentName = pipeline.leaderAgentName || toLeaderAgentName(pipeline.name);
-  const knowledgeArtifacts = buildKnowledgeBaseArtifacts(pipeline, projectRoot);
+  const compiledDir = path.join(paths.agentflowDir, "compiled", safeAsciiSlug(pipeline.id || pipeline.name));
+  const refs = buildGlobalAssetRefs(pipeline, {
+    agentflowDir: paths.agentflowDir,
+    claudeDir: paths.claudeDir,
+    compiledDir,
+  });
+  const knowledgeArtifacts = buildKnowledgeBaseArtifacts(pipeline, refs);
   const artifacts = [
     {
       type: "definition",
@@ -163,60 +159,88 @@ export function buildArtifacts(definition, paths) {
       nextContent: `${JSON.stringify(definition, null, 2)}\n`,
     },
     {
-      type: "manifest",
-      path: path.join(projectRoot, ".agentflow", "manifest.json"),
-      nextContent: `${JSON.stringify(buildManifest(definition), null, 2)}\n`,
-    },
-    {
-      type: "compiled-definition-snapshot",
-      path: path.join(projectRoot, ".agentflow", "compiled", "definition.snapshot.json"),
+      type: "pipeline-definition",
+      path: refs.pipelineDefinitionPath,
       nextContent: `${JSON.stringify(definition, null, 2)}\n`,
     },
     {
+      type: "manifest",
+      path: path.join(compiledDir, "manifest.json"),
+      nextContent: `${JSON.stringify(buildManifest(definition, refs), null, 2)}\n`,
+    },
+    {
+      type: "compiled-definition-snapshot",
+      path: path.join(compiledDir, "definition.snapshot.json"),
+      nextContent: `${JSON.stringify(definition, null, 2)}\n`,
+    },
+    {
+      type: "active-manifest",
+      path: refs.activeManifestPath,
+      nextContent: `${JSON.stringify(buildActiveManifest(definition, refs), null, 2)}\n`,
+    },
+    {
+      type: "active-bootstrap",
+      path: refs.activeBootstrapPath,
+      nextContent: renderActiveBootstrap(pipeline, refs),
+    },
+    {
       type: "compiled-leader",
-      path: path.join(projectRoot, ".agentflow", "compiled", "leader.md"),
-      nextContent: renderTeamLeaderAgent(pipeline),
+      path: path.join(compiledDir, "leader.md"),
+      nextContent: renderTeamLeaderAgent(pipeline, refs),
     },
     {
       type: "compiled-sop",
-      path: path.join(projectRoot, ".agentflow", "compiled", "sop.md"),
+      path: path.join(compiledDir, "sop.md"),
       nextContent: renderSopMarkdown(pipeline),
     },
     {
       type: "compiled-delegation-policy",
-      path: path.join(projectRoot, ".agentflow", "compiled", "delegation-policy.md"),
+      path: path.join(compiledDir, "delegation-policy.md"),
       nextContent: renderDelegationPolicyMarkdown(pipeline),
     },
     {
       type: "compiled-gates",
-      path: path.join(projectRoot, ".agentflow", "compiled", "gates.md"),
+      path: path.join(compiledDir, "gates.md"),
       nextContent: renderGatePlanMarkdown(pipeline),
     },
     {
       type: "compiled-gates-json",
-      path: path.join(projectRoot, ".agentflow", "compiled", "gates.json"),
+      path: path.join(compiledDir, "gates.json"),
       nextContent: `${JSON.stringify(buildGatePlan(pipeline), null, 2)}\n`,
     },
     ...knowledgeArtifacts,
     {
       type: "compiled-launch-prompt",
-      path: path.join(projectRoot, ".agentflow", "compiled", "launch-prompt.md"),
+      path: path.join(compiledDir, "launch-prompt.md"),
       nextContent: buildLaunchPrompt({
         pipeline,
         requirement: "",
         launchMode: "single-leader",
-        projectRoot: paths.projectRoot,
+        refs,
       }).prompt,
     },
     {
       type: "using-agentflow-skill",
-      path: path.join(projectRoot, ".claude", "skills", "using-agentflow", "SKILL.md"),
-      nextContent: renderUsingAgentFlowSkill(pipeline),
+      path: path.join(paths.claudeDir, "skills", "using-agentflow", "SKILL.md"),
+      nextContent: renderUsingAgentFlowSkill(pipeline, refs),
+    },
+    {
+      type: "slash-command",
+      path: path.join(paths.claudeDir, "commands", `${refs.commandName}.md`),
+      nextContent: renderAgentFlowSlashCommand(pipeline, refs),
+    },
+    {
+      type: "claude-global-memory",
+      path: refs.claudeMemoryPath,
+      nextContent: renderClaudeGlobalMemoryBlock(refs),
+      mergeStrategy: "marker-block",
+      markerStart: "<!-- AGENTFLOW:START -->",
+      markerEnd: "<!-- AGENTFLOW:END -->",
     },
     {
       type: "leader-agent",
       path: path.join(paths.claudeAgentsDir, `${leaderAgentName}.md`),
-      nextContent: renderTeamLeaderAgent(pipeline),
+      nextContent: renderTeamLeaderAgent(pipeline, refs),
     },
   ];
 
@@ -234,68 +258,64 @@ export function buildArtifacts(definition, paths) {
   return artifacts;
 }
 
-function buildKnowledgeBaseArtifacts(pipeline, projectRoot) {
+function buildKnowledgeBaseArtifacts(pipeline, refs) {
   if (!pipeline.knowledgeBase?.enabled) return [];
-
-  const wikiRoot = resolveWikiPath(pipeline, projectRoot);
-  const directoryKeepers = [
-    "raw/requirements",
-    "raw/designs",
-    "raw/reviews",
-    "raw/external",
-    "entities",
-    "concepts",
-    "decisions",
-    "comparisons",
-    "queries",
-  ].map((directory) => ({
-    type: "knowledge-wiki-dir",
-    path: path.join(wikiRoot, directory, ".gitkeep"),
-    nextContent: "",
-    seedOnly: true,
-  }));
 
   return [
     {
-      type: "knowledge-wiki-schema",
-      path: path.join(wikiRoot, "SCHEMA.md"),
-      nextContent: renderKnowledgeWikiSchema(pipeline),
-      seedOnly: true,
-    },
-    {
-      type: "knowledge-wiki-index",
-      path: path.join(wikiRoot, "index.md"),
-      nextContent: renderKnowledgeWikiIndex(pipeline),
-      seedOnly: true,
-    },
-    {
-      type: "knowledge-wiki-log",
-      path: path.join(wikiRoot, "log.md"),
-      nextContent: renderKnowledgeWikiLog(pipeline),
-      seedOnly: true,
-    },
-    ...directoryKeepers,
-    {
       type: "compiled-wiki-policy",
-      path: path.join(projectRoot, ".agentflow", "compiled", "wiki-policy.md"),
+      path: path.join(refs.compiledDir, "wiki-policy.md"),
       nextContent: renderKnowledgeWikiPolicy(pipeline),
     },
     {
       type: "compiled-wiki-ingest-prompt",
-      path: path.join(projectRoot, ".agentflow", "compiled", "wiki-ingest.prompt.md"),
+      path: path.join(refs.compiledDir, "wiki-ingest.prompt.md"),
       nextContent: renderKnowledgeWikiIngestPrompt(pipeline),
     },
     {
       type: "compiled-wiki-query-prompt",
-      path: path.join(projectRoot, ".agentflow", "compiled", "wiki-query.prompt.md"),
+      path: path.join(refs.compiledDir, "wiki-query.prompt.md"),
       nextContent: renderKnowledgeWikiQueryPrompt(pipeline),
     },
     {
       type: "using-agentflow-wiki-skill",
-      path: path.join(projectRoot, ".claude", "skills", "using-agentflow-wiki", "SKILL.md"),
+      path: refs.usingAgentFlowWikiSkillPath,
       nextContent: renderUsingAgentFlowWikiSkill(pipeline),
     },
   ];
+}
+
+function buildGlobalAssetRefs(pipeline, options = {}) {
+  const agentflowDir = options.agentflowDir || resolveConfiguredPath("~/.agentflow");
+  const claudeDir = options.claudeDir || resolveConfiguredPath("~/.claude");
+  const compiledDir = options.compiledDir || path.join(agentflowDir, "compiled", safeAsciiSlug(pipeline.id || pipeline.name));
+  const commandName = `agentflow-${safeAsciiSlug(pipeline.id || pipeline.name)}`;
+  return {
+    agentflowDir,
+    claudeDir,
+    compiledDir,
+    commandName,
+    definitionPath: path.join(agentflowDir, "definitions", "agentflow.pipeline.json"),
+    pipelineDefinitionPath: path.join(agentflowDir, "definitions", `${safeAsciiSlug(pipeline.id || pipeline.name)}.json`),
+    activeDir: path.join(agentflowDir, "active"),
+    activeManifestPath: path.join(agentflowDir, "active", "manifest.json"),
+    activeBootstrapPath: path.join(agentflowDir, "active", "bootstrap.md"),
+    manifestPath: path.join(compiledDir, "manifest.json"),
+    snapshotPath: path.join(compiledDir, "definition.snapshot.json"),
+    leaderPath: path.join(compiledDir, "leader.md"),
+    sopPath: path.join(compiledDir, "sop.md"),
+    delegationPolicyPath: path.join(compiledDir, "delegation-policy.md"),
+    gatesPath: path.join(compiledDir, "gates.md"),
+    gatesJsonPath: path.join(compiledDir, "gates.json"),
+    launchPromptPath: path.join(compiledDir, "launch-prompt.md"),
+    wikiPolicyPath: path.join(compiledDir, "wiki-policy.md"),
+    wikiIngestPromptPath: path.join(compiledDir, "wiki-ingest.prompt.md"),
+    wikiQueryPromptPath: path.join(compiledDir, "wiki-query.prompt.md"),
+    usingAgentFlowSkillPath: path.join(claudeDir, "skills", "using-agentflow", "SKILL.md"),
+    usingAgentFlowWikiSkillPath: path.join(claudeDir, "skills", "using-agentflow-wiki", "SKILL.md"),
+    commandPath: path.join(claudeDir, "commands", `${commandName}.md`),
+    claudeMemoryPath: path.join(claudeDir, "CLAUDE.md"),
+  };
 }
 
 export function buildLaunchPrompt({
@@ -303,26 +323,28 @@ export function buildLaunchPrompt({
   requirement = "",
   launchMode = "single-leader",
   runId = "",
-  projectRoot,
+  refs = null,
   promptFilePath = "",
 }) {
   const pipeline = normalizePipeline(rawPipeline);
   const mode = normalizeLaunchMode(launchMode);
   const leaderAgentName = pipeline.leaderAgentName || toLeaderAgentName(pipeline.name);
-  const resolvedProjectPath = resolveProjectPath(pipeline.projectPath, projectRoot);
-  const prompt = renderLaunchPrompt(pipeline, requirement, mode, resolvedProjectPath, runId);
-  const command = buildLaunchCommand(pipeline, prompt, leaderAgentName, runId, resolvedProjectPath, promptFilePath);
+  const assetRefs = refs || buildGlobalAssetRefs(pipeline);
+  const workingDirectory = "current Claude Code working directory";
+  const prompt = renderLaunchPrompt(pipeline, requirement, mode, workingDirectory, runId, assetRefs);
+  const command = buildLaunchCommand(pipeline, prompt, leaderAgentName, runId, workingDirectory, promptFilePath);
 
   return {
     leaderAgentName,
     launchMode: mode,
-    resolvedProjectPath,
+    resolvedProjectPath: workingDirectory,
+    workingDirectory,
     prompt,
     command,
   };
 }
 
-export function renderTeamLeaderAgent(pipeline) {
+export function renderTeamLeaderAgent(pipeline, refs = buildGlobalAssetRefs(pipeline)) {
   const leaderAgentName = pipeline.leaderAgentName || toLeaderAgentName(pipeline.name);
   const agents = pipeline.stages.flatMap((stage) => stage.agents);
   const agentLines = agents.length
@@ -351,13 +373,14 @@ You are the invoked Team Leader for the AgentFlow pipeline "${pipeline.name}".
 
 Use the AgentFlow compiled assets as your source of truth:
 
-- Project path: ${pipeline.projectPath}
-- Pipeline SOP: .agentflow/compiled/sop.md
-- Delegation policy: .agentflow/compiled/delegation-policy.md
-- Gate plan: .agentflow/compiled/gates.md
-- Machine-readable gate plan: .agentflow/compiled/gates.json
-- Bootstrap skill: .claude/skills/using-agentflow/SKILL.md
-${renderKnowledgeWikiAssetList(pipeline)}
+- Global install root: ${refs.agentflowDir}
+- Pipeline SOP: ${refs.sopPath}
+- Delegation policy: ${refs.delegationPolicyPath}
+- Gate plan: ${refs.gatesPath}
+- Machine-readable gate plan: ${refs.gatesJsonPath}
+- Bootstrap skill: ${refs.usingAgentFlowSkillPath}
+- Startup command: /${refs.commandName}
+${renderKnowledgeWikiAssetList(pipeline, refs)}
 
 Available roles:
 ${agentLines}
@@ -583,10 +606,10 @@ ${teamLifecycleRules}
 `;
 }
 
-export function renderUsingAgentFlowSkill(pipeline) {
+export function renderUsingAgentFlowSkill(pipeline, refs = buildGlobalAssetRefs(pipeline)) {
   const leaderAgentName = pipeline.leaderAgentName || toLeaderAgentName(pipeline.name);
   const recursiveProtocol = renderRecursiveDelegationProtocol(pipeline);
-  const knowledgeInstructions = renderUsingAgentFlowKnowledgeInstructions(pipeline);
+  const knowledgeInstructions = renderUsingAgentFlowKnowledgeInstructions(pipeline, refs);
   const teamLifecycleRules = renderTeamLifecycleRules("compiled");
   const handoffRoutingProtocol = renderLiveHandoffRoutingProtocol(leaderAgentName);
   const artifactDisclosureProtocol = renderArtifactDisclosureProtocol();
@@ -601,9 +624,9 @@ You are operating inside the AgentFlow pipeline "${pipeline.name}".
 
 Before taking action:
 
-1. Read the pipeline SOP from .agentflow/compiled/sop.md.
-2. Read the delegation policy from .agentflow/compiled/delegation-policy.md.
-3. Read the gate plan from .agentflow/compiled/gates.md. Use .agentflow/compiled/gates.json when you need structured gate data.
+1. Read the pipeline SOP from ${refs.sopPath}.
+2. Read the delegation policy from ${refs.delegationPolicyPath}.
+3. Read the gate plan from ${refs.gatesPath}. Use ${refs.gatesJsonPath} when you need structured gate data.
 4. If Knowledge Wiki is enabled, follow the Knowledge Wiki orientation below before stage work.
 5. Identify the current stage and required artifacts.
 6. Classify task complexity.
@@ -621,6 +644,7 @@ Important:
 
 - Shared agents are read-only references.
 - Managed agents may be regenerated by AgentFlow.
+- If the user needs a startup anchor, tell them to run /${refs.commandName} from any Claude Code session.
 - Claude Code agent teams are experimental and do not support nested teams.
 - If the request arrived via an explicit live handle such as ${formatLiveAgentHandle(leaderAgentName)}, preserve the handoff-first behavior and do not downgrade to simulation without explicit approval.
 - In single-leader mode, do not create, attach, or reuse a team. Reply through the current main session.
@@ -647,7 +671,7 @@ ${recursiveProtocol}
 `;
 }
 
-function renderUsingAgentFlowKnowledgeInstructions(pipeline) {
+function renderUsingAgentFlowKnowledgeInstructions(pipeline, refs = buildGlobalAssetRefs(pipeline)) {
   if (!pipeline.knowledgeBase?.enabled) {
     return "- Knowledge Wiki is disabled for this pipeline.";
   }
@@ -670,23 +694,23 @@ function renderUsingAgentFlowKnowledgeInstructions(pipeline) {
     `  1. ${wikiPath}/SCHEMA.md`,
     `  2. ${wikiPath}/index.md`,
     `  3. ${wikiPath}/log.md recent entries`,
-    "- Use .claude/skills/using-agentflow-wiki/SKILL.md for wiki maintenance rules when ingesting, querying, or proposing updates.",
+    `- Use ${refs.usingAgentFlowWikiSkillPath} for wiki maintenance rules when ingesting, querying, or proposing updates.`,
     `- ${writeModeRule}`,
     "- Valuable stage outputs should become durable wiki pages: requirements, designs, decisions, reviews, entities, concepts, comparisons, and reusable queries.",
   ].join("\n");
 }
 
-function renderKnowledgeWikiAssetList(pipeline) {
+function renderKnowledgeWikiAssetList(pipeline, refs = buildGlobalAssetRefs(pipeline)) {
   if (!pipeline.knowledgeBase?.enabled) return "";
   const wikiPath = pipeline.knowledgeBase.path || ".agentflow/wiki";
   return [
-    `- Knowledge Wiki policy: .agentflow/compiled/wiki-policy.md`,
-    `- Knowledge Wiki ingest prompt: .agentflow/compiled/wiki-ingest.prompt.md`,
-    `- Knowledge Wiki query prompt: .agentflow/compiled/wiki-query.prompt.md`,
+    `- Knowledge Wiki policy: ${refs.wikiPolicyPath}`,
+    `- Knowledge Wiki ingest prompt: ${refs.wikiIngestPromptPath}`,
+    `- Knowledge Wiki query prompt: ${refs.wikiQueryPromptPath}`,
     `- Knowledge Wiki schema: ${wikiPath}/SCHEMA.md`,
     `- Knowledge Wiki index: ${wikiPath}/index.md`,
     `- Knowledge Wiki log: ${wikiPath}/log.md`,
-    "- Knowledge Wiki skill: .claude/skills/using-agentflow-wiki/SKILL.md",
+    `- Knowledge Wiki skill: ${refs.usingAgentFlowWikiSkillPath}`,
   ].join("\n");
 }
 
@@ -936,7 +960,7 @@ function slugifyForTag(value) {
     .replace(/^-+|-+$/g, "") || "";
 }
 
-function renderLaunchPrompt(pipeline, requirement, launchMode, resolvedProjectPath, runId = "") {
+function renderLaunchPrompt(pipeline, requirement, launchMode, resolvedProjectPath, runId = "", refs = buildGlobalAssetRefs(pipeline)) {
   const leaderAgentName = pipeline.leaderAgentName || toLeaderAgentName(pipeline.name);
   const agents = pipeline.stages
     .flatMap((stage) => stage.agents.map((agent) => `- @${agent.agentName} (${agent.name})：${agent.responsibility || agent.description}`))
@@ -968,9 +992,19 @@ Main session handoff rules:
 Invoked leader context:
 - AgentFlow pipeline: ${pipeline.name}
 - Live leader handle: ${liveHandle}
+- Startup command: /${refs.commandName}
 
-项目路径：
+工作目录：
 ${resolvedProjectPath}
+
+AgentFlow global assets:
+- Install root: ${refs.agentflowDir}
+- Compiled dir: ${refs.compiledDir}
+- SOP: ${refs.sopPath}
+- Delegation policy: ${refs.delegationPolicyPath}
+- Gates: ${refs.gatesPath}
+- Gate JSON: ${refs.gatesJsonPath}
+- Bootstrap skill: ${refs.usingAgentFlowSkillPath}
 
 启动模式：
 ${launchMode}
@@ -999,7 +1033,7 @@ Leader execution requirements after handoff:
 7. 输出阶段状态、产物、风险、下一步，以及 Knowledge Wiki 更新建议。
 
 Knowledge Wiki:
-${renderUsingAgentFlowKnowledgeInstructions(pipeline)}
+${renderUsingAgentFlowKnowledgeInstructions(pipeline, refs)}
 
 递归委托协议：
 ${renderRecursiveDelegationBrief(pipeline)}
@@ -1011,6 +1045,67 @@ ${renderGateMatrix(pipeline)}
 
 ${renderRunSummary(pipeline, resolvedProjectPath)}
 `;
+}
+
+function renderAgentFlowSlashCommand(pipeline, refs = buildGlobalAssetRefs(pipeline)) {
+  const prompt = renderLaunchPrompt(pipeline, "$ARGUMENTS", "single-leader", "current Claude Code working directory", "", refs);
+  return `---
+description: Start the ${pipeline.name} AgentFlow pipeline through its global Team Leader.
+argument-hint: [requirement]
+---
+
+${prompt}
+`;
+}
+
+function renderActiveBootstrap(pipeline, refs = buildGlobalAssetRefs(pipeline)) {
+  return `# Active AgentFlow Pipeline
+
+Pipeline: ${pipeline.name}
+Pipeline ID: ${pipeline.id}
+Leader: @${pipeline.leaderAgentName || toLeaderAgentName(pipeline.name)}
+Manual command: /${refs.commandName}
+
+AgentFlow is installed globally. Treat the current Claude Code working directory as the project being worked on; do not assume AgentFlow assets live inside the project.
+
+Read these global assets before executing non-trivial coding, planning, review, or documentation tasks:
+
+1. ${refs.sopPath}
+2. ${refs.delegationPolicyPath}
+3. ${refs.gatesPath}
+4. ${refs.gatesJsonPath}
+5. ${refs.usingAgentFlowSkillPath}
+
+Operating rules:
+
+- Start by applying the active AgentFlow workflow unless the user explicitly asks to bypass AgentFlow.
+- Restate the user requirement, identify the current stage, and choose self / subagent / parallel subagents / agent team according to the delegation policy.
+- Use the configured Leader when task complexity crosses the delegation threshold.
+- Apply blocking gates before writing, reviewing, releasing, or performing destructive actions.
+- Shared agents are global references; do not rewrite shared agent files.
+- Do not write AgentFlow configuration into the current project unless the user explicitly asks.
+`;
+}
+
+function renderClaudeGlobalMemoryBlock(refs = buildGlobalAssetRefs({ id: "pipeline", name: "pipeline" })) {
+  return `# AgentFlow Global Bootstrap
+
+Before starting any non-trivial coding, planning, review, or documentation task:
+
+1. Check whether AgentFlow is installed by reading:
+   ${refs.activeBootstrapPath}
+
+2. If that file exists, follow it as the active global workflow policy.
+
+3. Treat the current Claude Code working directory as the project being worked on. Do not assume AgentFlow assets live inside the project.
+
+4. AgentFlow assets are user-global, normally under:
+   ${refs.activeDir}
+   ${refs.agentflowDir}/compiled
+
+5. If AgentFlow is not installed, continue normally.
+
+Do not copy AgentFlow rules into project files unless the user explicitly asks.`;
 }
 
 function buildModeInstruction(launchMode, pipeline) {
@@ -1061,15 +1156,15 @@ function buildInvocationDirective(launchMode) {
 
 function renderTeamLifecycleRules(launchMode, pipeline = {}, runId = "", resolvedProjectPath = "") {
   const teamName = recommendedTeamName(pipeline, runId);
-  const projectLine = resolvedProjectPath ? `- Current project path: ${resolvedProjectPath}` : "";
+  const projectLine = resolvedProjectPath ? `- Current working directory: ${resolvedProjectPath}` : "";
 
   if (launchMode === "force-team") {
     return [
       "- Mode: force-team. A live team is allowed and expected.",
       `- Use a run-scoped team name whenever possible: ${teamName}.`,
       projectLine,
-      "- Do not silently reuse an existing long-lived team if its leadSessionId, lead cwd, project path, or inbox subscription may belong to an old session.",
-      "- Before reusing a team, verify that the lead session is the current main session and that cwd matches the current project path.",
+      "- Do not silently reuse an existing long-lived team if its leadSessionId, lead cwd, working directory, or inbox subscription may belong to an old session.",
+      "- Before reusing a team, verify that the lead session is the current main session and that cwd matches the current working directory.",
       "- If verification is impossible or mismatched, create a fresh run-scoped team instead of attaching stale team context.",
       "- The live leader must ensure replies are visible in the current main session, not only written to team-lead inbox.",
       "- If a teammate reply lands in team-lead inbox but is not visible in the current chat, treat the team context as stale and report/recreate the team.",
@@ -1176,7 +1271,7 @@ function renderSkillSummary(skills = []) {
     : "none";
 }
 
-function renderRunSummary(pipeline, resolvedProjectPath = pipeline.projectPath) {
+function renderRunSummary(pipeline, resolvedProjectPath = "current Claude Code working directory") {
   const defaultSkills = renderSkillSummary(pipeline.defaultSkills || []);
   const stages = pipeline.stages
     .map((stage, index) => {
@@ -1195,7 +1290,7 @@ function renderRunSummary(pipeline, resolvedProjectPath = pipeline.projectPath) 
   return [
     `Pipeline: ${pipeline.name}`,
     `Leader agent: @${pipeline.leaderAgentName || toLeaderAgentName(pipeline.name)}`,
-    `Project: ${resolvedProjectPath}`,
+    `Working directory: ${resolvedProjectPath}`,
     `Default skills: ${defaultSkills}`,
     "",
     "Delegation policy:",
@@ -1760,28 +1855,27 @@ function inferGatePassCriteria(gate) {
 function buildLaunchCommand(pipeline, prompt, leaderAgentName, runId, resolvedProjectPath, promptFilePath = "") {
   const promptArg = promptFilePath ? `"$(cat ${shellQuote(promptFilePath)})"` : shellQuote(prompt);
   return [
-    `cd ${shellQuote(resolvedProjectPath)}`,
     "clear",
     `printf '%s\\n' ${shellQuote("AgentFlow 一键启动")}`,
     runId ? `printf '%s\\n' ${shellQuote(`Run ID: ${runId}`)}` : "",
-    `printf '%s\\n' ${shellQuote(`Project: ${resolvedProjectPath}`)}`,
+    `printf '%s\\n' ${shellQuote(`Working directory: ${resolvedProjectPath}`)}`,
     `printf '%s\\n' ${shellQuote(`Leader: ${formatLiveAgentHandle(leaderAgentName)}`)}`,
     promptFilePath ? `printf '%s\\n' ${shellQuote(`Prompt file: ${promptFilePath}`)}` : "",
     `claude ${promptArg}`,
   ].filter(Boolean).join("; ");
 }
 
-function buildManifest(definition) {
+function buildManifest(definition, refs = buildGlobalAssetRefs(definition.pipeline)) {
   const pipeline = definition.pipeline;
   const knowledgeAssets = pipeline.knowledgeBase?.enabled
     ? [
         `${pipeline.knowledgeBase.path}/SCHEMA.md`,
         `${pipeline.knowledgeBase.path}/index.md`,
         `${pipeline.knowledgeBase.path}/log.md`,
-        ".agentflow/compiled/wiki-policy.md",
-        ".agentflow/compiled/wiki-ingest.prompt.md",
-        ".agentflow/compiled/wiki-query.prompt.md",
-        ".claude/skills/using-agentflow-wiki/SKILL.md",
+        refs.wikiPolicyPath,
+        refs.wikiIngestPromptPath,
+        refs.wikiQueryPromptPath,
+        refs.usingAgentFlowWikiSkillPath,
       ]
     : [];
   return {
@@ -1792,17 +1886,43 @@ function buildManifest(definition) {
     leaderAgentName: pipeline.leaderAgentName,
     knowledgeBase: pipeline.knowledgeBase,
     launchModes: ["single-leader", "suggest-team", "force-team"],
+    startupCommand: `/${refs.commandName}`,
     assets: [
-      ".agentflow/compiled/definition.snapshot.json",
-      ".agentflow/compiled/leader.md",
-      ".agentflow/compiled/sop.md",
-      ".agentflow/compiled/delegation-policy.md",
-      ".agentflow/compiled/gates.md",
-      ".agentflow/compiled/gates.json",
-      ".agentflow/compiled/launch-prompt.md",
-      ".claude/skills/using-agentflow/SKILL.md",
+      refs.snapshotPath,
+      refs.leaderPath,
+      refs.sopPath,
+      refs.delegationPolicyPath,
+      refs.gatesPath,
+      refs.gatesJsonPath,
+      refs.launchPromptPath,
+      refs.usingAgentFlowSkillPath,
+      refs.commandPath,
       ...knowledgeAssets,
     ],
+  };
+}
+
+function buildActiveManifest(definition, refs = buildGlobalAssetRefs(definition.pipeline)) {
+  const pipeline = definition.pipeline;
+  return {
+    version: 1,
+    activePipelineId: pipeline.id,
+    activePipelineName: pipeline.name,
+    leaderAgentName: pipeline.leaderAgentName,
+    startupCommand: `/${refs.commandName}`,
+    bootstrapPath: refs.activeBootstrapPath,
+    compiledDir: refs.compiledDir,
+    definitionPath: refs.definitionPath,
+    pipelineDefinitionPath: refs.pipelineDefinitionPath,
+    assets: {
+      sop: refs.sopPath,
+      delegationPolicy: refs.delegationPolicyPath,
+      gates: refs.gatesPath,
+      gatesJson: refs.gatesJsonPath,
+      usingAgentFlowSkill: refs.usingAgentFlowSkillPath,
+      leaderAgent: path.join(refs.claudeDir, "agents", `${pipeline.leaderAgentName}.md`),
+      slashCommand: refs.commandPath,
+    },
   };
 }
 

@@ -1,12 +1,4 @@
 <script setup>
-function displayProjectPath(value) {
-  return value === "." ? "" : value || "";
-}
-
-function projectPathLabel(value) {
-  return value && value !== "." ? value : "当前工程目录";
-}
-
 defineProps({
   selectedPipeline: { type: Object, default: null },
   pipelines: { type: Array, required: true },
@@ -61,11 +53,6 @@ function gateSummary(action) {
         placeholder="Team Leader Agent 名称，留空自动生成"
       />
       <input
-        v-model="forms.projectPath"
-        type="text"
-        placeholder="项目地址，留空表示当前工程目录，例如：/path/to/project"
-      />
-      <input
         v-model="forms.claudeDir"
         type="text"
         placeholder="Claude 目录，默认 ~/.claude"
@@ -92,7 +79,6 @@ function gateSummary(action) {
         <strong>{{ pipeline.name }}</strong>
         <span>Stages: {{ pipeline.stages.length }} · Actions: {{ pipeline.sop?.stages?.reduce((total, stage) => total + stage.actions.length, 0) || 0 }}</span>
         <span>Leader: {{ pipeline.leaderAgentName }}</span>
-        <span>{{ projectPathLabel(pipeline.projectPath) }}</span>
         <span>{{ pipeline.claudeDir }}</span>
         <span>{{ pipeline.sharedAgentsDir }}</span>
       </button>
@@ -101,7 +87,7 @@ function gateSummary(action) {
     <div v-if="selectedPipeline" class="toolbar-group">
       <div class="section-heading tight">
         <p>当前流水线</p>
-        <span>编辑已存在的流水线配置，预检和编译都会使用这里的目录。</span>
+        <span>编辑已存在的流水线配置，预检和编译都会写入用户级全局目录。</span>
       </div>
       <div class="stack-form">
         <input
@@ -115,12 +101,6 @@ function gateSummary(action) {
           type="text"
           placeholder="Team Leader Agent 名称"
           @input="$emit('set-pipeline-field', 'leaderAgentName', $event.target.value)"
-        />
-        <input
-          :value="displayProjectPath(selectedPipeline.projectPath)"
-          type="text"
-          placeholder="项目地址，留空表示当前工程目录"
-          @input="$emit('set-pipeline-field', 'projectPath', $event.target.value)"
         />
         <input
           :value="selectedPipeline.claudeDir"

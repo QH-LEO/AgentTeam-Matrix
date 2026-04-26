@@ -128,25 +128,23 @@ Agent 启动时会拿到流程、角色、门禁、委托策略、Knowledge Wiki
 当前仓库包含两个主要可运行模块：
 
 - `frontend/`：Vue 3 + Vite 的 Pipeline Studio，用于配置流程、策略、门禁、Agent、Skill，并预览编译产物。
-- `orchestrator/`：Node.js + Express 的配置编译服务，负责读取 DSL、校验配置、生成 `.agentflow/` / `.claude/` 资产，并生成运行启动 Prompt。
+- `orchestrator/`：Node.js + Express 的配置编译服务，负责读取 DSL、校验配置、生成用户级 `~/.agentflow/` / `~/.claude/` 资产，并生成运行启动 Prompt。
 
-核心配置源是：
+平台运行时的核心配置源是：
 
 ```text
-configs/agentflow.pipeline.json
+~/.agentflow/definitions/agentflow.pipeline.json
 ```
 
-它是当前可编辑 DSL，优先级高于已经编译出的 `.agentflow/compiled/*` 文件。
+它是当前可编辑 DSL，优先级高于已经编译出的 `~/.agentflow/compiled/<pipelineId>/*` 文件。仓库内 `configs/` 仅作为示例或开发夹具，不再作为运行存储。
 
 ## 目录结构
 
 ```text
 .
-├── .agentflow/                 # 当前项目已编译的 AgentMatrix 资产与 Wiki
-├── .claude/                    # 本项目生成的 Claude skill bootstrap
 ├── backend/                    # 后端预留目录，当前主要服务在 orchestrator/
 ├── configs/
-│   ├── agentflow.pipeline.json # 当前可编辑 DSL，优先级最高
+│   ├── agentflow.pipeline.json # 示例/开发 DSL
 │   └── agentflow.definition-sync.json
 ├── docs/                       # 产品、前端和 Wiki 设计资料
 ├── frontend/                   # Pipeline Studio Vue 应用
@@ -190,7 +188,7 @@ http://localhost:5173
 ## 工作台使用流程
 
 1. 在「流程编排」中维护 Pipeline、阶段、动作、输入输出和阶段顺序。
-2. 在「策略模型」中配置项目路径、Claude 目录、共享 Agent 目录、委托策略和 Knowledge Wiki。
+2. 在「策略模型」中配置 Claude 目录、共享 Agent 目录、委托策略和 Knowledge Wiki。
 3. 在「门禁管理」中维护质量门禁及其证据、通过标准和失败动作。
 4. 在「Agent 职责」中为阶段绑定共享 Agent 或托管 Agent。
 5. 在「Skill 管理」中为流水线或 Agent 绑定 Skill。
@@ -199,21 +197,41 @@ http://localhost:5173
 
 ## 编译产物
 
-执行编译后，orchestrator 会按当前 Pipeline 生成或更新这些资产：
+执行编译后，orchestrator 会按当前 Pipeline 生成或更新这些用户级资产：
 
-- `configs/agentflow.pipeline.json`：规范化后的 DSL。
-- `.agentflow/manifest.json`：运行 manifest。
-- `.agentflow/compiled/definition.snapshot.json`：当前 definition 快照。
-- `.agentflow/compiled/leader.md`：Team Leader 指令。
-- `.agentflow/compiled/sop.md`：阶段与动作 SOP。
-- `.agentflow/compiled/delegation-policy.md`：委托策略。
-- `.agentflow/compiled/gates.md` 和 `.agentflow/compiled/gates.json`：门禁计划。
-- `.agentflow/compiled/launch-prompt.md`：默认启动 Prompt。
-- `.agentflow/wiki/`：Knowledge Wiki seed 或已维护的 Wiki 结构。
-- `.claude/skills/using-agentflow/SKILL.md`：AgentMatrix 运行协议 Skill。
+- `~/.agentflow/definitions/agentflow.pipeline.json`：平台维护的规范化 DSL。
+- `~/.agentflow/definitions/<pipelineId>.json`：单条 pipeline 的安装快照，供 shell 安装和排查使用。
+- `~/.agentflow/active/manifest.json` 和 `bootstrap.md`：当前无感生效的 active pipeline。
+- `~/.agentflow/compiled/<pipelineId>/manifest.json`：运行 manifest。
+- `~/.agentflow/compiled/<pipelineId>/definition.snapshot.json`：当前 definition 快照。
+- `~/.agentflow/compiled/<pipelineId>/leader.md`：Team Leader 指令。
+- `~/.agentflow/compiled/<pipelineId>/sop.md`：阶段与动作 SOP。
+- `~/.agentflow/compiled/<pipelineId>/delegation-policy.md`：委托策略。
+- `~/.agentflow/compiled/<pipelineId>/gates.md` 和 `gates.json`：门禁计划。
+- `~/.agentflow/compiled/<pipelineId>/launch-prompt.md`：默认启动 Prompt。
+- `~/.claude/commands/agentflow-<pipelineId>.md`：全局启动锚点，进入任意工程后运行 `/agentflow-<pipelineId> <需求>`。
+- `~/.claude/CLAUDE.md`：通过 `<!-- AGENTFLOW:START -->` marker block 读取 active bootstrap，使 AgentFlow 安装后默认无感生效。
+- `~/.claude/skills/using-agentflow/SKILL.md`：AgentFlow 运行协议 Skill。
+- `~/.claude/skills/using-agentflow-wiki/SKILL.md`：Knowledge Wiki 维护 Skill，仅在启用 Wiki 时写入。
 - `~/.claude/agents/*.md`：Leader 和托管 Agent 文件。
 
-如果 `configs/agentflow.pipeline.json` 与 `.agentflow/compiled/*` 不一致，应以配置文件表达的最新意图为准，并记录配置与编译产物之间的漂移。
+如果 `~/.agentflow/definitions/agentflow.pipeline.json` 与 `~/.agentflow/compiled/<pipelineId>/*` 不一致，应以配置文件表达的最新意图为准，并记录配置与编译产物之间的漂移。
+
+## Shell 安装
+
+最终用户不需要下载本仓库。可以用安装脚本从 DSL URL 生成全局资产：
+
+```bash
+curl -fsSL <install-sh-url> | bash
+```
+
+安装后，在任意工程打开 Claude Code，AgentFlow 会通过用户级 `~/.claude/CLAUDE.md` 自动读取 active bootstrap 并默认生效。也可以手动执行辅助入口：
+
+```text
+/agentflow-<pipelineId> 你的需求
+```
+
+更多用法见 [`docs/install-agentflow-shell.md`](docs/install-agentflow-shell.md)。
 
 ## Orchestrator API
 

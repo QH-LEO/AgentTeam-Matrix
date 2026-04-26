@@ -8,17 +8,19 @@ const STORAGE_FILE = fileURLToPath(import.meta.url);
 const ORCHESTRATOR_ROOT = path.resolve(path.dirname(STORAGE_FILE), "..");
 
 export const PROJECT_ROOT = path.resolve(ORCHESTRATOR_ROOT, "..");
-export const DEFINITION_PATH = path.join(PROJECT_ROOT, "configs", "agentflow.pipeline.json");
-export const DEFINITION_SYNC_STATE_PATH = path.join(PROJECT_ROOT, "configs", "agentflow.definition-sync.json");
 export const HOME_DIR = os.homedir();
-export const DEFAULT_CLAUDE_DIR = path.join(HOME_DIR, ".claude");
-export const SYSTEM_DEFINITION_SNAPSHOT_RELATIVE_PATH = path.join(".agentflow", "compiled", "definition.snapshot.json");
+export const DEFAULT_AGENTFLOW_DIR = resolveConfiguredPath(process.env.AGENTFLOW_HOME || "~/.agentflow");
+export const DEFINITION_PATH = path.join(DEFAULT_AGENTFLOW_DIR, "definitions", "agentflow.pipeline.json");
+export const DEFINITION_SYNC_STATE_PATH = path.join(DEFAULT_AGENTFLOW_DIR, "state", "definition-sync.json");
+export const DEFAULT_CLAUDE_DIR = resolveConfiguredPath(process.env.AGENTFLOW_CLAUDE_DIR || "~/.claude");
+export const SYSTEM_DEFINITION_SNAPSHOT_RELATIVE_PATH = path.join("compiled", "definition.snapshot.json");
 
 export function getPaths(options = {}) {
   const claudeDir = getClaudeDir(options.claudeDir);
   const sharedAgentsDir = getSharedAgentsDir(options.sharedAgentsDir, claudeDir);
   return {
     projectRoot: PROJECT_ROOT,
+    agentflowDir: getAgentflowDir(options.agentflowDir),
     definitionPath: DEFINITION_PATH,
     claudeDir,
     claudeAgentsDir: getClaudeAgentsDir(claudeDir),
@@ -31,20 +33,19 @@ export function readDefinition() {
   return readNormalizedDefinitionFile(DEFINITION_PATH);
 }
 
-export function readSystemDefinitionSnapshot(projectPath, baseDir = PROJECT_ROOT) {
-  const snapshotPath = getSystemDefinitionSnapshotPath(projectPath, baseDir);
+export function readSystemDefinitionSnapshot(pipelineId, agentflowDir = DEFAULT_AGENTFLOW_DIR) {
+  const snapshotPath = getSystemDefinitionSnapshotPath(pipelineId, agentflowDir);
   return readNormalizedDefinitionFile(snapshotPath);
 }
 
-export function getSystemDefinitionSnapshotPath(projectPath, baseDir = PROJECT_ROOT) {
-  const resolvedProjectPath = resolveProjectPath(projectPath, baseDir);
-  return path.join(resolvedProjectPath, SYSTEM_DEFINITION_SNAPSHOT_RELATIVE_PATH);
+export function getSystemDefinitionSnapshotPath(pipelineId, agentflowDir = DEFAULT_AGENTFLOW_DIR) {
+  return path.join(getCompiledDir(pipelineId, agentflowDir), "definition.snapshot.json");
 }
 
 export function withCurrentContent(artifacts) {
   return artifacts.map((artifact) => {
     const currentContent = fs.existsSync(artifact.path) ? fs.readFileSync(artifact.path, "utf8") : "";
-    const nextContent = artifact.seedOnly && currentContent ? currentContent : artifact.nextContent;
+    const nextContent = resolveNextContent(artifact, currentContent);
     return {
       ...artifact,
       currentContent,
@@ -65,6 +66,30 @@ export function writeArtifacts(artifacts) {
     path: artifact.path,
     changed: artifact.changed,
   }));
+}
+
+function resolveNextContent(artifact, currentContent) {
+  if (artifact.seedOnly && currentContent) return currentContent;
+  if (artifact.mergeStrategy === "marker-block") {
+    return mergeMarkerBlock(currentContent, artifact.markerStart, artifact.markerEnd, artifact.nextContent);
+  }
+  return artifact.nextContent;
+}
+
+function mergeMarkerBlock(currentContent, markerStart, markerEnd, blockContent) {
+  const start = markerStart || "<!-- AGENTFLOW:START -->";
+  const end = markerEnd || "<!-- AGENTFLOW:END -->";
+  const block = `${start}\n${String(blockContent || "").trim()}\n${end}`;
+  const pattern = new RegExp(`${escapeRegExp(start)}[\\s\\S]*?${escapeRegExp(end)}`);
+  if (pattern.test(currentContent)) {
+    return currentContent.replace(pattern, block).replace(/\n*$/, "\n");
+  }
+  const prefix = currentContent ? currentContent.replace(/\n*$/, "\n\n") : "";
+  return `${prefix}${block}\n`;
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 export function writeDefinition(definition) {
@@ -135,11 +160,19 @@ export function listClaudeAgents(options = {}) {
 }
 
 export function getClaudeDir(claudeDir) {
-  return resolveConfiguredPath(claudeDir, { fallback: "~/.claude" });
+  return resolveConfiguredPath(claudeDir, { fallback: process.env.AGENTFLOW_CLAUDE_DIR || "~/.claude" });
 }
 
 export function getClaudeAgentsDir(claudeDir) {
   return path.join(getClaudeDir(claudeDir), "agents");
+}
+
+export function getAgentflowDir(agentflowDir) {
+  return resolveConfiguredPath(agentflowDir, { fallback: process.env.AGENTFLOW_HOME || "~/.agentflow" });
+}
+
+export function getCompiledDir(pipelineId, agentflowDir = DEFAULT_AGENTFLOW_DIR) {
+  return path.join(getAgentflowDir(agentflowDir), "compiled", safePathSegment(pipelineId || "pipeline"));
 }
 
 export function getSharedAgentsDir(sharedAgentsDir, claudeDir) {
@@ -202,4 +235,10 @@ export function canCreateDirectory(directory) {
 
 export function pathExistsDirectory(directory) {
   return fs.existsSync(directory) && fs.statSync(directory).isDirectory();
+}
+
+function safePathSegment(value) {
+  return String(value || "pipeline")
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "pipeline";
 }

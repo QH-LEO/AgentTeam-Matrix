@@ -70,8 +70,8 @@ defineEmits([
           handoff 成功后，后续 approve/reject 必须发给 runtime 返回的精确 agentId/taskId，不能再按角色名重发。
         </p>
         <div class="launch-command-preview">
-          <span>项目目录</span>
-          <strong>{{ launchPreview?.resolvedProjectPath || currentRun?.pipeline?.projectPath }}</strong>
+          <span>工作目录</span>
+          <strong>{{ launchPreview?.workingDirectory || launchPreview?.resolvedProjectPath || "当前 Claude Code 工作目录" }}</strong>
           <span>Live Handle</span>
           <strong>@"{{ currentRun?.pipeline?.leaderAgentName }} (agent)"</strong>
           <span>启动模式</span>

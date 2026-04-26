@@ -43,7 +43,7 @@ defineEmits(["preview-compile", "apply-compile", "sync-definition", "run-lint", 
     </div>
 
     <div class="toolbar-status">
-      优先从最后一次实际写入的 `definition.snapshot.json` 反向重建 DSL；如果是老版本历史产物没有快照记录，`Sync DSL` 会回退到实际配置路径下的 `compiled/leader.md` 结构化定义继续恢复。
+      优先从全局安装目录里的 `definition.snapshot.json` 反向重建 DSL；如果没有快照记录，`Sync DSL` 会回退到全局 compiled leader 的结构化定义继续恢复。
     </div>
 
     <section :class="['preflight-preview-card', preflightSummary.status]">
@@ -112,6 +112,6 @@ defineEmits(["preview-compile", "apply-compile", "sync-definition", "run-lint", 
       </section>
     </div>
 
-    <div v-else class="panel-empty">点击“生成预览”查看本次编译将写入哪些项目资产。</div>
+    <div v-else class="panel-empty">点击“生成预览”查看本次编译将写入哪些全局资产。</div>
   </div>
 </template>

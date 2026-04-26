@@ -7,9 +7,10 @@ import { spawn, spawnSync } from "node:child_process";
 import { buildCompilePlan, buildLaunchPrompt, lintDefinition } from "./compiler.js";
 import { normalizeDefinitionRequest, normalizeLaunchMode, normalizePipeline } from "./schema.js";
 import {
-  canCreateDirectory,
+  canCreateOrWriteDirectory,
   canWriteDirectory,
   getDefinitionSyncRecord,
+  getCompiledDir,
   getClaudeAgentsDir,
   getClaudeDir,
   getSharedAgentsDir,
@@ -20,7 +21,6 @@ import {
   readDefinition,
   readDefinitionFile,
   resolveConfiguredPath,
-  resolveProjectPath,
   withCurrentContent,
   writeDefinition,
   writeDefinitionSyncRecord,
@@ -293,12 +293,6 @@ app.post("/api/runs", (req, res) => {
   const runId = `run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
   const requirement = String(req.body?.requirement || "");
   const launchMode = normalizeLaunchMode(req.body?.launchMode);
-  const resolvedProjectPath = resolveProjectPath(pipeline.projectPath);
-
-  if (!pathExistsDirectory(resolvedProjectPath)) {
-    res.status(400).json({ error: "invalid projectPath", detail: resolvedProjectPath });
-    return;
-  }
 
   runs.set(runId, {
     runId,
@@ -351,7 +345,6 @@ app.post("/api/runs/:runId/open-iterm", (req, res) => {
     requirement,
     launchMode,
     runId: run.runId,
-    projectRoot: getPaths().projectRoot,
   });
   const promptFilePath = writeLaunchPromptFile(run.runId, launch.prompt);
   const { command: launchCommand, prompt } = buildLaunchPrompt({
@@ -359,7 +352,6 @@ app.post("/api/runs/:runId/open-iterm", (req, res) => {
     requirement,
     launchMode,
     runId: run.runId,
-    projectRoot: getPaths().projectRoot,
     promptFilePath,
   });
   const launchScriptPath = writeLaunchScriptFile(run.runId, launchCommand);
@@ -391,8 +383,10 @@ server.listen(PORT, () => {
 });
 
 function resolveDefinitionSyncSource(pipeline, currentDefinition = null) {
-  const projectPath = pipeline?.projectPath || ".";
-  const resolvedProjectPath = resolveProjectPath(projectPath, getPaths().projectRoot);
+  const paths = getPaths({
+    claudeDir: pipeline?.claudeDir,
+    sharedAgentsDir: pipeline?.sharedAgentsDir,
+  });
   const record = getDefinitionSyncRecord(pipeline?.id);
   const snapshotPath = record?.snapshotPath || record?.sourcePath || "";
   const definition = snapshotPath ? readDefinitionFile(snapshotPath) : null;
@@ -400,8 +394,7 @@ function resolveDefinitionSyncSource(pipeline, currentDefinition = null) {
     return {
       sourceKind: "last-written-snapshot",
       source: record?.source || "compile-apply",
-      projectPath: record?.projectPath || projectPath,
-      resolvedProjectPath: record?.resolvedProjectPath || resolvedProjectPath,
+      resolvedProjectPath: record?.resolvedProjectPath || paths.agentflowDir,
       sourcePath: snapshotPath,
       snapshotPath,
       definitionPath: record?.definitionPath || getPaths().definitionPath,
@@ -410,14 +403,13 @@ function resolveDefinitionSyncSource(pipeline, currentDefinition = null) {
     };
   }
 
-  const legacySnapshotPath = path.join(resolvedProjectPath, ".agentflow", "compiled", "definition.snapshot.json");
+  const legacySnapshotPath = path.join(getCompiledDir(pipeline?.id || "pipeline", paths.agentflowDir), "definition.snapshot.json");
   const legacySnapshot = readDefinitionFile(legacySnapshotPath);
   if (legacySnapshot) {
     return {
       sourceKind: "legacy-snapshot",
       source: "system-snapshot",
-      projectPath,
-      resolvedProjectPath,
+      resolvedProjectPath: paths.agentflowDir,
       sourcePath: legacySnapshotPath,
       snapshotPath: legacySnapshotPath,
       definitionPath: getPaths().definitionPath,
@@ -426,14 +418,13 @@ function resolveDefinitionSyncSource(pipeline, currentDefinition = null) {
     };
   }
 
-  const compiledLeaderPath = path.join(resolvedProjectPath, ".agentflow", "compiled", "leader.md");
+  const compiledLeaderPath = path.join(getCompiledDir(pipeline?.id || "pipeline", paths.agentflowDir), "leader.md");
   const compiledLeaderDefinition = readDefinitionFromCompiledLeader(compiledLeaderPath);
   if (compiledLeaderDefinition) {
     return {
       sourceKind: "compiled-leader",
       source: "compiled-leader",
-      projectPath,
-      resolvedProjectPath,
+      resolvedProjectPath: paths.agentflowDir,
       sourcePath: compiledLeaderPath,
       snapshotPath: compiledLeaderPath,
       definitionPath: getPaths().definitionPath,
@@ -445,8 +436,7 @@ function resolveDefinitionSyncSource(pipeline, currentDefinition = null) {
   return {
     sourceKind: "last-written-snapshot",
     source: record?.source || "compile-apply",
-    projectPath,
-    resolvedProjectPath,
+    resolvedProjectPath: paths.agentflowDir,
     sourcePath: snapshotPath || compiledLeaderPath,
     snapshotPath: snapshotPath || legacySnapshotPath || compiledLeaderPath,
     definitionPath: record?.definitionPath || getPaths().definitionPath,
@@ -488,8 +478,10 @@ function persistDefinitionSyncRecord(plan, written, source) {
     sourceKind: "last-written-snapshot",
     snapshotPath: snapshotArtifact.path,
     sourcePath: snapshotArtifact.path,
-    projectPath: pipeline.projectPath || ".",
-    resolvedProjectPath: resolveProjectPath(pipeline.projectPath, getPaths().projectRoot),
+    resolvedProjectPath: getPaths({
+      claudeDir: pipeline.claudeDir,
+      sharedAgentsDir: pipeline.sharedAgentsDir,
+    }).agentflowDir,
     definitionPath: getPaths().definitionPath,
     updatedAt: new Date().toISOString(),
   });
@@ -499,9 +491,9 @@ function buildPreflightChecks(pipeline) {
   const claudeDir = getClaudeDir(pipeline.claudeDir);
   const claudeAgentsDir = getClaudeAgentsDir(claudeDir);
   const sharedAgentsDir = getSharedAgentsDir(pipeline.sharedAgentsDir, claudeDir);
-  const resolvedProjectPath = resolveProjectPath(pipeline.projectPath);
   const leaderAgentName = pipeline.leaderAgentName;
   const leaderPath = getAgentPath(leaderAgentName, claudeAgentsDir);
+  const agentflowDir = getPaths().agentflowDir;
   const sharedAgents = pipeline.stages.flatMap((stage) =>
     stage.agents.filter((agent) => agent.source === "shared")
   );
@@ -516,7 +508,7 @@ function buildPreflightChecks(pipeline) {
     .filter((skill) => skill.path)
     .map((skill) => ({
       name: skill.scope ? `${skill.name} (${skill.scope})` : skill.name,
-      path: resolveSkillPath(resolvedProjectPath, skill.path),
+      path: resolveSkillPath(skill.path),
     }));
   const missingSharedAgents = sharedAgents.filter((agent) => !fs.existsSync(getAgentPath(agent.agentName, sharedAgentsDir)));
   const missingSkillRefs = skillRefs.filter((skill) => !pathExistsDirectory(skill.path));
@@ -527,11 +519,10 @@ function buildPreflightChecks(pipeline) {
     "/usr/bin/claude",
   ]);
   const iTermAvailable = checkITerm().ok;
-  const projectPathExists = pathExistsDirectory(resolvedProjectPath);
   const agentsDirExists = fs.existsSync(claudeAgentsDir);
   const sharedAgentsDirExists = pathExistsDirectory(sharedAgentsDir);
-  const agentflowDir = path.join(resolvedProjectPath, ".agentflow");
-  const projectClaudeSkillsDir = path.join(resolvedProjectPath, ".claude", "skills");
+  const claudeSkillsDir = path.join(claudeDir, "skills");
+  const claudeCommandsDir = path.join(claudeDir, "commands");
 
   return [
     {
@@ -547,30 +538,22 @@ function buildPreflightChecks(pipeline) {
       detail: sharedAgentsDirExists ? sharedAgentsDir : `目录不存在：${sharedAgentsDir}`,
     },
     {
-      id: "project-path",
-      label: "项目地址",
-      status: projectPathExists ? "pass" : "fail",
-      detail: projectPathExists ? resolvedProjectPath : `项目目录不存在：${resolvedProjectPath}`,
-    },
-    {
-      id: "project-write",
-      label: "项目写入权限",
-      status: projectPathExists && canWriteDirectory(resolvedProjectPath) ? "pass" : "fail",
-      detail: projectPathExists && canWriteDirectory(resolvedProjectPath)
-        ? "可写入项目级 AgentFlow 资产"
-        : "项目目录不可写，无法生成 .agentflow 或 .claude/skills",
-    },
-    {
       id: "agentflow-dir",
-      label: ".agentflow 资产目录",
-      status: projectPathExists && (fs.existsSync(agentflowDir) ? canWriteDirectory(agentflowDir) : canCreateDirectory(agentflowDir)) ? "pass" : "fail",
+      label: "AgentFlow 全局资产目录",
+      status: canCreateOrWriteDirectory(agentflowDir) ? "pass" : "fail",
       detail: agentflowDir,
     },
     {
-      id: "project-claude-skills",
-      label: "项目 Claude Skills",
-      status: projectPathExists && (fs.existsSync(projectClaudeSkillsDir) ? canWriteDirectory(projectClaudeSkillsDir) : canCreateDirectory(projectClaudeSkillsDir)) ? "pass" : "fail",
-      detail: projectClaudeSkillsDir,
+      id: "claude-skills",
+      label: "Claude Skills",
+      status: canCreateOrWriteDirectory(claudeSkillsDir) ? "pass" : "fail",
+      detail: claudeSkillsDir,
+    },
+    {
+      id: "claude-commands",
+      label: "Claude Slash Commands",
+      status: canCreateOrWriteDirectory(claudeCommandsDir) ? "pass" : "fail",
+      detail: claudeCommandsDir,
     },
     {
       id: "claude-cli",
@@ -619,8 +602,8 @@ function buildPreflightChecks(pipeline) {
   ];
 }
 
-function resolveSkillPath(projectPath, skillPath) {
-  return resolveConfiguredPath(skillPath, { baseDir: projectPath });
+function resolveSkillPath(skillPath) {
+  return resolveConfiguredPath(skillPath, { baseDir: getPaths().agentflowDir });
 }
 
 function checkTmux() {
